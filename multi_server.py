@@ -3,19 +3,23 @@ import logging
 import time
 from threading import Event, Thread
 import server
+import pandas as pd
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 
 
-def start_server_process(sid, client_data):
-    logging.info(f"Starting server {sid}...")
-    datasite, client = server.spawn_server(sid, client_data)
+def start_server_process(sid, client_data, port):
+    logging.info(f"Starting server {sid} on port {port}...")
+
+    datasite, client = server.spawn_server(client_data, sid, port)
+
     if datasite and client:
-        logging.info(f"Server {sid} started.")
+        logging.info(f"Server {sid} started on port {port}.")
         stop_event = Event()
-        approval_thread = Thread(target=server.check_and_approve_incoming_requests, args=(client, stop_event))
+        approval_thread = Thread(target=server.check_and_approve_requests, args=(client,))
         approval_thread.start()
+
         try:
             while True:
                 time.sleep(10)
@@ -26,18 +30,21 @@ def start_server_process(sid, client_data):
     else:
         logging.error(f"Server {sid} failed to start.")
 
-if __name__ == "__main__":
-    num_servers = 3
 
-    # Load and partition data once
+if __name__ == "__main__":
     full_data = server.load_full_data()
-    data_partitions = server.partition_data(full_data, num_servers)
+
+    # 🔥 Split data by user_id
+    users = full_data["user_id"].unique()
+    base_port = 55000
 
     processes = []
 
-    for sid in range(num_servers):
-        client_data = data_partitions[sid]
-        p = multiprocessing.Process(target=start_server_process, args=(sid, client_data))
+    for i, user in enumerate(users):
+        client_data = full_data[full_data["user_id"] == user]
+        port = base_port + i
+
+        p = multiprocessing.Process(target=start_server_process, args=(i, client_data, port))
         p.start()
         processes.append(p)
 
