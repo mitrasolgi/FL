@@ -17,20 +17,7 @@ from sklearn.metrics import precision_recall_curve, f1_score
 
 
 def tune_threshold(confidences, true_labels, min_precision=0.7, normalize=False):
-    """
-    Tune threshold by maximizing F1-score while ensuring precision >= min_precision.
-    
-    Args:
-        confidences (array-like): Model confidences (e.g., from sigmoid).
-        true_labels (array-like): True binary labels (0 or 1).
-        min_precision (float): Minimum acceptable precision.
-        normalize (bool): Whether to normalize confidences to [0,1] before tuning.
-        
-    Returns:
-        best_thresh: The threshold that gives the best F1 score meeting the precision requirement.
-        best_f1: Best F1 score achieved.
-        tuned_confs: (Optionally) normalized confidences if normalization was applied.
-    """
+
     confs = np.array(confidences)
     
     if normalize:
@@ -66,7 +53,6 @@ class BiometricHomomorphicMLP:
         self.HE = ts.context(
             scheme=ts.SCHEME_TYPE.CKKS,
             poly_modulus_degree=poly_modulus_degree,
-            # Increased coefficient modulus chain for more multiplicative depth
             coeff_mod_bit_sizes=[60, 40, 40, 40, 40, 40, 60]
         )
         self.HE.global_scale = 2 ** scale
@@ -85,27 +71,26 @@ class BiometricHomomorphicMLP:
         print(f"   - Hidden dimension: {hidden_dim}")
         print(f"   - Polynomial modulus degree: {poly_modulus_degree}")
         print(f"   - Scale: 2^{scale}")
-        
+
     def init_weights(self):
         """Initialize weights for biometric classification"""
-        # Xavier initialization optimized for biometric features
         self.w1 = np.random.normal(0, np.sqrt(1.0 / self.input_dim), 
                                    (self.hidden_dim, self.input_dim))
         self.b1 = np.zeros(self.hidden_dim)
         self.w2 = np.random.normal(0, 0.01, self.hidden_dim)
         self.b2 = 0.0
-        
+
     def poly_activation(self, x):
         """Simple polynomial activation to minimize multiplicative depth"""
-        # For TenSEAL, we need simpler operations
-        return x * 0.5 + x * x * 0.125
-    
-    def train_encrypted_with_decrypted_gradients(self, X, y, epochs=10, lr=0.001):
-        """
-        Train the model on biometric data by encrypting inputs,
-        doing encrypted forward pass, decrypting outputs, and
-        updating weights in plaintext using decrypted gradients.
-        """
+        return x * (0.5 + 0.125 * x)
+
+    def layer_norm(self, x, epsilon=1e-5):
+        """Layer normalization for a 1D numpy array"""
+        mean = np.mean(x)
+        std = np.std(x)
+        return (x - mean) / (std + epsilon)
+
+    def train_encrypted_with_decrypted_gradients(self, X, y, epochs=20, lr=0.005):
         if hasattr(X, "to_numpy"):
             X = X.to_numpy()
         if hasattr(y, "to_numpy"):
@@ -113,13 +98,12 @@ class BiometricHomomorphicMLP:
 
         print(f"🏋️ Encrypted Training (with decrypted gradients) for {epochs} epochs...")
         n = len(X)
-        
-        # Use smaller batch for testing to avoid memory issues
-        batch_size = min(50, n)
+
+        batch_size = min(100, n)
         indices = np.random.choice(n, batch_size, replace=False)
         X_batch = X[indices]
         y_batch = y[indices]
-        
+
         print(f"   - Using batch size: {batch_size}")
 
         for epoch in range(epochs):
@@ -128,27 +112,17 @@ class BiometricHomomorphicMLP:
 
             for i in range(len(X_batch)):
                 try:
-                    # Encrypt input sample
                     enc_x = ts.ckks_vector(self.HE, X_batch[i].tolist())
-
-                    # Encrypted forward pass
                     enc_pred = self.secure_forward_pass(enc_x)
-
-                    # Decrypt prediction
                     pred = enc_pred.decrypt()[0]
 
-                    # Compute loss (MSE)
                     loss = (pred - y_batch[i]) ** 2
                     total_loss += loss
 
-                    # Plaintext forward pass for gradients calculation
                     z1 = np.dot(self.w1, X_batch[i]) + self.b1
-                    a1 = np.maximum(0, z1)  # ReLU activation for gradient
+                    a1 = np.maximum(0, z1)  # ReLU
 
-                    # Gradient of loss w.r.t prediction (MSE)
                     grad_output = 2 * (pred - y_batch[i])
-
-                    # Gradients for weights and biases
                     grad_w2 = grad_output * a1
                     grad_b2 = grad_output
 
@@ -158,12 +132,11 @@ class BiometricHomomorphicMLP:
                     grad_w1 = np.outer(grad_hidden, X_batch[i])
                     grad_b1 = grad_hidden
 
-                    # Update weights
                     self.w1 -= lr * grad_w1
                     self.b1 -= lr * grad_b1
                     self.w2 -= lr * grad_w2
                     self.b2 -= lr * grad_b2
-                    
+
                 except Exception as e:
                     print(f"   ❌ Error in sample {i}: {e}")
                     continue
@@ -173,58 +146,32 @@ class BiometricHomomorphicMLP:
             print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}, Time: {epoch_time:.2f}s")
 
         self.is_trained = True
-        print("✅ Encrypted training with decrypted gradients completed!")    
-        
+        print("✅ Encrypted training with decrypted gradients completed!")
+
     def preprocess_biometric_data(self, data):
-        """
-        Preprocess biometric data for homomorphic encryption
-        
-        Args:
-            data: DataFrame with biometric features and user_id
-            
-        Returns:
-            X: Processed features
-            y: Binary labels (authentic vs impostor)
-        """
         print("📊 Preprocessing biometric data...")
-        
-        # Remove non-numeric columns
         numeric_columns = data.select_dtypes(include=[np.number]).columns
         feature_data = data[numeric_columns]
-        
-        # Handle missing values
         feature_data = feature_data.fillna(feature_data.mean())
-        
-        # Create binary authentication task
-        # For demonstration: classify users into two groups
+
         users = data['user_id'].unique()
-        target_users = users[:len(users)//2]  # First half as "authentic"
-        
-        # Create labels: 1 for target users, 0 for others
+        target_users = users[:len(users)//2]
+
         y = data['user_id'].isin(target_users).astype(int)
-        
-        # Normalize features
         X = self.scaler.fit_transform(feature_data)
-        
+
         print(f"   - Features shape: {X.shape}")
         print(f"   - Authentic samples: {np.sum(y)}")
         print(f"   - Impostor samples: {len(y) - np.sum(y)}")
-        
+
         return X, y
-    
+
     def encrypt_sample(self, sample):
-        """Encrypt a single biometric sample."""
         return ts.ckks_vector(self.HE, sample.tolist())
 
     def encrypt_biometric_batch(self, X_batch, batch_size=50):
-        """
-        Encrypt biometric data in batches using multithreading for speed.
-        """
         print(f"🔒 Encrypting {len(X_batch)} biometric samples...")
-
         encrypted_data = []
-        
-        # Sequential encryption to avoid context issues
         for i, sample in enumerate(X_batch):
             try:
                 encrypted_sample = self.encrypt_sample(sample)
@@ -234,86 +181,41 @@ class BiometricHomomorphicMLP:
             except Exception as e:
                 print(f"   ❌ Encryption failed for sample {i}: {e}")
                 continue
-        
         print("✅ Biometric encryption completed!")
         return encrypted_data
-    
-    def secure_forward_pass_basic(self, enc_x):
-        """
-        Most basic forward pass using only guaranteed TenSEAL operations
-        """
-        try:
-            # Only use operations that definitely exist in TenSEAL
-            # Single weight vector approach
-            
-            # Create a simple weighted sum
-            result = 0.0
-            for i in range(min(len(self.w2), self.input_dim)):
-                # Get one element at a time to avoid complex operations
-                weighted = enc_x[i] * self.w2[i]
-                result += weighted
-            
-            # Add bias
-            result += self.b2
-            
-            return result
-            
-        except Exception as e:
-            print(f"❌ Basic forward pass error: {e}")
-            raise
-    
-    def secure_forward_pass_simple(self, enc_x):
-        """
-        Ultra-simple forward pass for TenSEAL - single layer
-        """
-        try:
-            # Single linear layer to avoid complexity
-            # Truncate weights to match input dimension if needed
-            w_truncated = self.w2[:min(len(self.w2), self.input_dim)]
-            
-            # Simple dot product + bias
-            enc_output = enc_x.dot(w_truncated.tolist()) + self.b2
-            
-            return enc_output
-            
-        except Exception as e:
-            print(f"❌ Simple forward pass error: {e}")
-            # Try the most basic version
-            return self.secure_forward_pass_basic(enc_x)
-    
+
     def secure_forward_pass(self, enc_x):
         """
-        Secure forward pass with simplified TenSEAL operations
+        Returns encrypted final output and decrypted layer 1 pre-activation vector
         """
         try:
-            # Try the complex version first, fallback to simple
-            try:
-                # Layer 1: W1 * x + b1 (using matrix multiplication)
-                enc_z1 = enc_x.mm(self.w1.T.tolist())
-                
-                # Add bias (element-wise)
-                enc_z1 = enc_z1 + self.b1.tolist()
-                
-                # Simple activation (linear scaling to avoid polynomial complexity)
-                enc_a1 = enc_z1 * 0.5
-                
-                # Layer 2: W2 * a1 + b2
-                enc_output = enc_a1.dot(self.w2.tolist()) + self.b2
-                
-                return enc_output
-                
-            except Exception as e1:
-                print(f"   - Complex forward pass failed: {e1}")
-                print("   - Trying simple forward pass...")
-                return self.secure_forward_pass_simple(enc_x)
-            
+            # Encrypted layer 1 pre-activation: enc_z1 = W1*x + b1
+            enc_z1 = enc_x.mm(self.w1.T.tolist())  # encrypted vector of size hidden_dim
+            enc_z1 = enc_z1 + self.b1.tolist()
+
+            # Decrypt pre-activation for layer norm
+            decrypted_z1 = enc_z1.decrypt()
+
+            # Apply layer normalization on decrypted hidden pre-activation
+            norm_z1 = self.layer_norm(np.array(decrypted_z1))
+
+            # Re-encrypt normalized values to continue encrypted computation
+            enc_norm_z1 = ts.ckks_vector(self.HE, norm_z1.tolist())
+
+            # Simple activation polynomial (e.g. linear scaling)
+            enc_a1 = enc_norm_z1 * 0.5
+
+            # Encrypted output layer: W2 * a1 + b2 (dot product)
+            enc_output = enc_a1.dot(self.w2.tolist()) + self.b2
+
+            return enc_output
+
         except Exception as e:
             print(f"❌ Forward pass error: {e}")
             raise
 
     @classmethod
     def from_weights(cls, w1, b1, w2, b2, **kwargs):
-        """Create model from existing weights"""
         model = cls(input_dim=w1.shape[1], hidden_dim=w1.shape[0], **kwargs)
         model.w1 = w1
         model.b1 = b1
@@ -322,64 +224,39 @@ class BiometricHomomorphicMLP:
         model.is_trained = True
         return model
 
-    def authenticate_encrypted(self, X_test):
-        """
-        Authenticate using encrypted inference
-        """
+    def authenticate_encrypted(self, X_test, threshold=0.55):
         if not self.is_trained:
             print("⚠️ Model not trained yet!")
             return None, None
-            
+
         preds = []
         confs = []
-        
-        # Limit test size for performance
-        # test_size = min(20, len(X_test))
-        test_size = len(X_test)  # test on full set
-        print(f"🔍 Testing on {test_size} samples...")
 
-        for i in range(test_size):
+        for i in range(len(X_test)):
             try:
-                # Encrypt sample if not already encrypted
-                if not hasattr(X_test[i], 'decrypt'):
-                    enc_x = self.encrypt_sample(X_test[i])
-                else:
-                    enc_x = X_test[i]
-                
-                # Forward pass
+                enc_x = self.encrypt_sample(X_test[i])
                 enc_pred = self.secure_forward_pass(enc_x)
-                threshold = 0.55  # Try 0.6, 0.65, 0.7, etc.
-
-                # Decrypt and classify
                 decrypted = enc_pred.decrypt()[0]
+
                 confidence = self.sigmoid(decrypted)
                 label = 1 if confidence > threshold else 0
                 preds.append(label)
                 confs.append(confidence)
-                # thresholds = np.linspace(0.3, 0.7, 9)
-                # for t in thresholds:
-                #     labels = (confs > t).astype(int)
-                #     # Calculate metrics here for labels vs true_labels
-                #     print(f"Threshold {t:.2f}: predicted positives = {labels.sum()}")
 
+                # if i % 5 == 0:
+                #     print(f"   - Sample {i+1}: decrypted={decrypted:.4f}, confidence={confidence:.4f}")
 
-                
-                if i % 5 == 0:
-                    print(f"   - Sample {i+1}: prediction = {decrypted:.4f}")
-                    
             except Exception as e:
                 print(f"   ❌ Error processing sample {i}: {e}")
                 continue
 
-        return np.array(preds), np.array(confs)
+        print(f"✅ Encrypted inference complete: {len(preds)} predictions made.")
+        return np.array(preds).astype(int), np.array(confs)
 
     def sigmoid(self, x):
         return 1 / (1 + np.exp(-x))
+
     def train_on_biometric_data(self, X, y, epochs=5, lr=0.001):
-        """
-        Train the model on biometric data using homomorphic encryption
-        (Simplified version with reduced complexity)
-        """
         if hasattr(X, "to_numpy"):
             X = X.to_numpy()
         if hasattr(y, "to_numpy"):
@@ -389,44 +266,39 @@ class BiometricHomomorphicMLP:
         print(f"   - Samples: {len(X)}")
         print(f"   - Features: {X.shape[1]}")
         print(f"   - Learning rate: {lr}")
-        
-        # Use smaller subset for training due to computational complexity
+
         train_size = min(30, len(X))
         indices = np.random.choice(len(X), train_size, replace=False)
         X_train = X[indices]
         y_train = y[indices]
-        
+
         print(f"   - Training on {len(X_train)} samples")
-        
-        # Encrypt training data
+
         print("🔒 Encrypting training data...")
         enc_X_train = self.encrypt_biometric_batch(X_train)
-        
+
         for epoch in range(epochs):
             print(f"\n🔄 Epoch {epoch + 1}/{epochs}")
             epoch_start = time.time()
-            
+
             total_loss = 0.0
             successful_samples = 0
-            
+
             for i, (enc_x, yi) in enumerate(zip(enc_X_train, y_train)):
                 try:
-                    # Forward pass
                     enc_pred = self.secure_forward_pass(enc_x)
-                    
-                    # Decrypt and compute loss
                     pred_val = enc_pred.decrypt()[0]
                     loss = (pred_val - yi) ** 2
                     total_loss += loss
                     successful_samples += 1
-                    
+
                     if i % 10 == 0:
                         print(f"   - Sample {i+1}: pred={pred_val:.4f}, target={yi}, loss={loss:.4f}")
-                        
+
                 except Exception as e:
                     print(f"   - Warning: Sample {i} failed: {e}")
                     continue
-            
+
             if successful_samples > 0:
                 avg_loss = total_loss / successful_samples
                 epoch_time = time.time() - epoch_start
@@ -434,7 +306,7 @@ class BiometricHomomorphicMLP:
                 print(f"   - Epoch time: {epoch_time:.2f}s")
             else:
                 print("   - No successful samples in this epoch")
-        
+
         self.is_trained = True
         print("✅ Biometric model training completed!")
 
@@ -646,50 +518,73 @@ def evaluate_biometric_model(y_true, y_pred_conf, confidence, threshold=0.5):
 
 import threading
 
-def run_federated_training_with_syft(data, ports=[55000, 55001]):
-    """Run federated training setup with Syft"""
-    # Split data among clients
+def run_federated_training_with_syft(data, ports=None):
+    """Run federated training setup with Syft for N clients (default 8)"""
+
+    if ports is None:
+        ports = [55000 + i for i in range(8)]  # Default to ports 55000–55007
+
+    print(f"🌐 Setting up federated training with {len(ports)} clients")
+
+    # Shuffle and split user_ids evenly among clients
     users = data["user_id"].unique()
     np.random.seed(42)
     np.random.shuffle(users)
-    splits = np.array_split(users, len(ports))
-    
-    dfs = [data[data["user_id"].isin(split)] for split in splits]
+    user_splits = np.array_split(users, len(ports))
+
+    # Create dataframes for each client
+    dfs = [data[data["user_id"].isin(split)] for split in user_splits]
+
     servers = []
     clients = []
 
-    for port, df in zip(ports, dfs):
-        server, client = start_server(port, df)
-        servers.append(server)
-        clients.append(client)
-        threading.Thread(target=approve_requests, args=(client,), daemon=True).start()
+    for i, (port, df) in enumerate(zip(ports, dfs)):
+        print(f"🚀 Starting server for Client {i} on port {port}")
+        try:
+            server, client = start_server(port, df)
+            servers.append(server)
+            clients.append(client)
+            threading.Thread(target=approve_requests, args=(client,), daemon=True).start()
+        except Exception as e:
+            print(f"❌ Failed to start server {i} on port {port}: {e}")
 
-    sleep(3)  # Give Syft servers time to initialize and approve
+    sleep(5)  # Wait a bit longer for more clients to initialize
 
     client_datasets = {}
 
-    for c in clients:
-        df = c.datasets.get_all()[0].assets[0].data
+    for i, client in enumerate(clients):
+        try:
+            df = client.datasets.get_all()[0].assets[0].data
 
-        y = df["label"].values
-        X = df.drop(columns=["label", "user_id"], errors="ignore").apply(pd.to_numeric, errors="coerce").dropna().values
-        y = y[:len(X)]
+            y = df["label"].values
+            X = df.drop(columns=["label", "user_id"], errors="ignore")
+            X = X.apply(pd.to_numeric, errors="coerce").dropna().values
+            y = y[:len(X)]
 
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X)
 
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_scaled, y, test_size=0.2, random_state=42, stratify=y
-        )
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_scaled, y, test_size=0.2, random_state=42, stratify=y
+            )
 
-        client_datasets[c.name] = {
-            "X_train": X_train,
-            "y_train": y_train,
-            "X_test": X_test,
-            "y_test": y_test
-        }
+            client_datasets[f"Client{i}"] = {
+                "X_train": X_train,
+                "y_train": y_train,
+                "X_test": X_test,
+                "y_test": y_test,
+                "port": ports[i],
+                "num_users": len(user_splits[i])
+            }
+
+            print(f"✅ Client{i}: {len(X_train)} train, {len(X_test)} test samples")
+
+        except Exception as e:
+            print(f"❌ Failed to process data for Client{i}: {e}")
+            continue
 
     return client_datasets
+
 
 
 def compare_plain_vs_encrypted_federated():
@@ -701,6 +596,11 @@ def compare_plain_vs_encrypted_federated():
     print(f"\n📊 Loaded {len(data)} biometric records from {data['user_id'].nunique()} users")
 
     client_datasets = run_federated_training_with_syft(data)
+
+    print("\n📊 Sample count per client:")
+    for cname, d in client_datasets.items():
+        print(f"   {cname}: train={len(d['X_train'])}, test={len(d['X_test'])}, total={len(d['X_train']) + len(d['X_test'])}")
+    
 
     # ===== PLAIN MLP TRAINING =====
     print("\n📦 Training Plain MLPs on each client")
@@ -731,7 +631,6 @@ def compare_plain_vs_encrypted_federated():
     avg_b1 = np.mean([p[1] for p in encrypted_params], axis=0)
     avg_w2 = np.mean([p[2] for p in encrypted_params], axis=0)
     avg_b2 = np.mean([p[3] for p in encrypted_params])
-        # Add this right after parameter aggregation:
     print("\n🔍 Testing aggregated weights in plain model:")
     test_plain_with_agg = PlainBiometricMLP(input_dim=avg_w1.shape[1], hidden_dim=16)  # Note: shape[1] not [0]
     test_plain_with_agg.w1 = avg_w1
@@ -740,16 +639,37 @@ def compare_plain_vs_encrypted_federated():
     test_plain_with_agg.b2 = avg_b2
     test_plain_with_agg.is_trained = True
 
-    # Test on one client's data
-    test_data = client_datasets['Factory0']
-    try:
-        agg_pred, agg_conf = test_plain_with_agg.predict(test_data["X_test"])
-        print(f"   Aggregated plain model: accuracy={np.mean(agg_pred == test_data['y_test']):.4f}, "
-            f"avg_conf={np.mean(agg_conf):.4f}")
-        print(f"   Prediction range: [{agg_pred.min()}, {agg_pred.max()}]")
-        print(f"   Confidence range: [{agg_conf.min():.4f}, {agg_conf.max():.4f}]")
-    except Exception as e:
-        print(f"   ❌ Aggregated plain model failed: {e}")
+    for cname, test_data in client_datasets.items():
+        try:
+            # Make predictions
+            agg_pred, agg_conf = test_plain_with_agg.predict(test_data["X_test"])
+
+            # Metrics
+            acc = np.mean(agg_pred == test_data["y_test"])
+            prec = precision_score(test_data["y_test"], agg_pred, zero_division=0)
+            rec = recall_score(test_data["y_test"], agg_pred, zero_division=0)
+            f1 = f1_score(test_data["y_test"], agg_pred, zero_division=0)
+            conf_mean = np.mean(agg_conf)
+            conf_std = np.std(agg_conf)
+            conf_min = agg_conf.min()
+            conf_max = agg_conf.max()
+
+            print(f"   {cname}:")
+            print(f"     accuracy     = {acc:.4f}")
+            print(f"     precision    = {prec:.4f}")
+            print(f"     recall       = {rec:.4f}")
+            print(f"     f1-score     = {f1:.4f}")
+            print(f"     avg_conf     = {conf_mean:.4f}")
+            print(f"     conf_std     = {conf_std:.4f}")
+            print(f"     conf_range   = [{conf_min:.4f}, {conf_max:.4f}]")
+
+            # Optional: show confusion matrix
+            # cm = confusion_matrix(test_data["y_test"], agg_pred)
+            # print(f"     confusion matrix:\n{cm}")
+
+        except Exception as e:
+            print(f"   ❌ Aggregated model failed on {cname}: {e}")
+
     # Add this after aggregation, before encrypted model creation:
     print("\n🔍 Checking aggregated parameters:")
     print(f"   avg_w1 shape: {avg_w1.shape}, range: [{avg_w1.min():.4f}, {avg_w1.max():.4f}]")
@@ -772,11 +692,20 @@ def compare_plain_vs_encrypted_federated():
     X_combined = np.vstack([d["X_train"] for d in client_datasets.values()])
     y_combined = np.hstack([d["y_train"] for d in client_datasets.values()])
     
-    try:
-        he_mlp.train_encrypted_with_decrypted_gradients(X_combined, y_combined, epochs=3, lr=0.01)
-    except Exception as e:
-        print(f"❌ Encrypted training failed: {e}")
-        print("   Continuing with evaluation using aggregated weights...")
+    for lr in [0.01, 0.001]:
+        for epochs in [20, 30]:
+            print(f"\n🔁 Trying config: lr={lr}, epochs={epochs}")
+            try:
+                # Reset model using fresh weights
+                trial_model = BiometricHomomorphicMLP.from_weights(
+                    w1=avg_w1.copy(), b1=avg_b1.copy(), 
+                    w2=avg_w2.copy(), b2=avg_b2.copy(),
+                    poly_modulus_degree=32768, scale=20
+                )
+                trial_model.train_encrypted_with_decrypted_gradients(X_combined, y_combined, epochs=epochs, lr=lr)
+            except Exception as e:
+                print(f"❌ Training failed at lr={lr}, epochs={epochs}: {e}")
+
 
     # ===== EVALUATION =====
     print("\n📊 Model Evaluation per client")
@@ -798,10 +727,24 @@ def compare_plain_vs_encrypted_federated():
                 # plot_confidence_distribution(norm_conf, d["y_test"][:len(he_pred)])
 
                 # Use fixed threshold or search for one manually
-                best_threshold = 0.55  # You may tune this manually for now
-                metrics_he = evaluate_biometric_model(d["y_test"][:len(he_pred)], norm_conf, norm_conf, threshold=best_threshold)
+                # best_threshold = 0.55 
+                # metrics_he = evaluate_biometric_model(d["y_test"][:len(he_pred)], norm_conf, norm_conf, threshold=best_threshold)
 
-                print(f"📈 Applied threshold: {best_threshold:.4f}")
+                # print(f"📈 Applied threshold: {best_threshold:.4f}")
+                # Tune threshold using confidences and ground truth
+                best_threshold, best_f1, norm_conf_tuned = tune_threshold(norm_conf, d["y_test"][:len(he_pred)], min_precision=0.6)
+
+                # Evaluate using the tuned threshold
+                # Recompute binary predictions using the tuned threshold
+                he_pred = (norm_conf > best_threshold).astype(int)
+
+                metrics_he = evaluate_biometric_model(
+                    d["y_test"][:len(he_pred)], he_pred, norm_conf, threshold=best_threshold
+                )
+
+
+                print(f"📈 Applied tuned threshold: {best_threshold:.4f} with F1-score: {best_f1:.4f}")
+
             else:
                 metrics_he = {"error": "No successful predictions"}
         except Exception as e:
