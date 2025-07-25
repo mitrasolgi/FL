@@ -20,7 +20,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from syft_utils import load_data, run_federated_training_with_syft,evaluate_model,get_ckks_context,evaluate_biometric_model
 import threading
-
+from sklearn.ensemble import RandomForestClassifier
 
 class BiometricHomomorphicLogisticRegression:
     def __init__(self,input_dim, poly_modulus_degree=8192, scale=2**40):
@@ -449,109 +449,113 @@ class SimpleEncryptedMLP:
         return np.array(predictions), np.array(confidences)
 
 def run_centralized_training():
-    print("🧠 Centralized Training with Encrypted & Plain Biometric MLP + Logistic Regression")
-    print("=" * 70)
-
-    # Load and preprocess data
-    data = load_data()
-    print(f"\n📊 Loaded {len(data)} biometric records from {data['user_id'].nunique()} users")
-
-    # ===========================
-    # Preprocess data (shared) - DO THIS FIRST
-    # ===========================
-    print("📊 Preprocessing biometric data...")
-    numeric_columns = data.select_dtypes(include=[np.number]).columns
-    feature_data = data[numeric_columns]
-    feature_data = feature_data.fillna(feature_data.mean())
-
-    users = data['user_id'].unique()
-    target_users = users[:len(users)//2]
-
-    y = data['user_id'].isin(target_users).astype(int)
-
-    # Scale the features
-    from sklearn.preprocessing import StandardScaler
-    scaler = StandardScaler()
-    X = scaler.fit_transform(feature_data)
-
-    print(f"   - Features shape: {X.shape}")
-    print(f"   - Authentic samples: {np.sum(y)}")
-    print(f"   - Impostor samples: {len(y) - np.sum(y)}")
-
-    # Create train/test split and convert to numpy arrays
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
-
-    # Ensure everything is numpy arrays (not pandas)
-    X_train = np.array(X_train)
-    X_test = np.array(X_test) 
-    y_train = np.array(y_train)
-    y_test = np.array(y_test)
-
-    print(f"   - Training samples: {len(X_train)}")
-    print(f"   - Test samples: {len(X_test)}")
-
-    # ===========================
-    # 🔐 Setup Encrypted MLP - NOW we can use X_train.shape[1]
-    # ===========================
-
-    print("\n🔐 Training Encrypted MLP...")
-    encrypted_mlp = SimpleEncryptedMLP(input_dim=X_train.shape[1], hidden_dim=32)
-    encrypted_mlp.train_with_encrypted_data(X_train, y_train, epochs=30, lr=0.01, verbose=False)
-    mlp_pred_enc, mlp_conf_enc = encrypted_mlp.predict_with_encrypted_data(X_test, threshold=0.55, verbose=False)
-    mlp_enc_metrics = evaluate_biometric_model(y_test, mlp_pred_enc, mlp_conf_enc)
-        # ===========================
-    # 🧠 Plain MLP Training
-    # ===========================
-    plain_mlp = MLPClassifier(hidden_layer_sizes=(X_train.shape[1],), max_iter=1000, random_state=42)
-    plain_mlp.fit(X_train, y_train)
-    mlp_conf_plain = plain_mlp.predict_proba(X_test)[:, 1]
-    mlp_pred_plain = (mlp_conf_plain > 0.5).astype(int)
-    mlp_plain_metrics = evaluate_biometric_model(y_test, mlp_pred_plain, mlp_conf_plain)
-
-    # ===========================
-    # 🟩 Logistic Regression (Plaintext)
-    # ===========================
-    logreg = LogisticRegression(max_iter=1000)
-    logreg.fit(X_train, y_train)
-    logreg_conf = logreg.predict_proba(X_test)[:, 1]
-    logreg_pred = (logreg_conf > 0.5).astype(int)
-    logreg_metrics = evaluate_biometric_model(y_test, logreg_pred, logreg_conf)
-
-    # ===========================
-    # 🔐 Logistic Regression (Encrypted)
-    # ===========================
-    he_logreg = BiometricHomomorphicLogisticRegression(input_dim=X_train.shape[1])
-    he_logreg.train_plaintext(X_train, y_train)
-    preds_enc, confs_enc =  he_logreg.predict_encrypted(X_test, use_polynomial=False)
-    logreg_enc_metrics = evaluate_biometric_model(y_test, preds_enc, confs_enc)
-
-    # ===========================
-    # 📊 Print Results
-    # ===========================
-    print("\n📈 Evaluation Results (Centralized Setup)")
+    print("🧠 Centralized Training - Essential Methods")
+    print("=" * 50)
     
-    print("\n🔐 BiometricHomomorphicMLP (Encrypted):")
-    for k, v in mlp_enc_metrics.items():
+    # Load data
+    data = load_data()
+    print(f"\n📊 Loaded {len(data)} records from {data['user_id'].nunique()} users")
+    
+    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg']
+    
+    # ===========================
+    # Method 1: Per-User Individual Models
+    # ===========================
+    print("\n👤 Per-User Individual Models:")
+    
+    acc_list = []
+    f1_list = []
+    
+    for user in data['user_id'].unique():
+        # Get data for this specific user
+        user_data = data[data['user_id'] == user].copy()
+        
+            
+        # Prepare features and labels
+        X = user_data[feature_columns].fillna(user_data[feature_columns].mean())
+        y = user_data['label'].values
+        
+        if len(np.unique(y)) < 2:
+            continue
+            
+        # Scale and split
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_scaled, y, test_size=0.2, random_state=42, stratify=y
+        )
+        
+        # Train Decision Tree
+        from sklearn.tree import DecisionTreeClassifier
+        clf = DecisionTreeClassifier(random_state=42)
+        clf.fit(X_train, y_train)
+        
+        # Predict and evaluate
+        y_pred = clf.predict(X_test)
+        acc = accuracy_score(y_test, y_pred)
+        f1 = f1_score(y_test, y_pred, zero_division=0)
+        
+        acc_list.append(acc)
+        f1_list.append(f1)
+    
+    per_user_results = {
+        'accuracy': np.mean(acc_list),
+        'f1': np.mean(f1_list),
+        'accuracy_std': np.std(acc_list),
+        'f1_std': np.std(f1_list)
+    }
+    
+    # ===========================
+    # Method 2: True Centralized
+    # ===========================
+    print("🌐 True Centralized:")
+    
+    # Prepare all data together
+    X_all = data[feature_columns].fillna(data[feature_columns].mean())
+    y_all = data['label'].values
+    
+    # Scale and split
+    scaler_all = StandardScaler()
+    X_all_scaled = scaler_all.fit_transform(X_all)
+    X_train_all, X_test_all, y_train_all, y_test_all = train_test_split(
+        X_all_scaled, y_all, test_size=0.2, random_state=42, stratify=y_all
+    )
+    
+    # Train MLP (best performer from previous results)
+    mlp = MLPClassifier(hidden_layer_sizes=(64, 32), max_iter=1000, random_state=42)
+    mlp.fit(X_train_all, y_train_all)
+    
+    # Predict and evaluate
+    y_pred = mlp.predict(X_test_all)
+    y_prob = mlp.predict_proba(X_test_all)[:, 1]
+    centralized_results = evaluate_biometric_model(y_test_all, y_pred, y_prob)
+    
+    # ===========================
+    # Results
+    # ===========================
+    print("\n📈 Results Summary")
+    print("=" * 30)
+    
+    print(f"\n👤 Per-User Approach (Average across {len(acc_list)} users):")
+    for k, v in per_user_results.items():
         print(f"   {k}: {v:.4f}")
-
-    print("\n🧠 MLPClassifier (Plain):")
-    for k, v in mlp_plain_metrics.items():
+    
+    print(f"\n🌐 Centralized MLP:")
+    for k, v in centralized_results.items():
         print(f"   {k}: {v:.4f}")
-
-    print("\n🟩 Logistic Regression (Plain):")
-    for k, v in logreg_metrics.items():
-        print(f"   {k}: {v:.4f}")
-
-    print("\n🔐 Logistic Regression (Encrypted):")
-    for k, v in logreg_enc_metrics.items():
-        print(f"   {k}: {v:.4f}")
-
-    print("\n✅ Centralized Training Completed")
-    print("=" * 70)
-
-
-
+    
+    print(f"\n📊 Performance Gap:")
+    gap = per_user_results['f1'] - centralized_results['f1']
+    print(f"   Per-User F1: {per_user_results['f1']:.3f}")
+    print(f"   Centralized F1: {centralized_results['f1']:.3f}")
+    print(f"   Gap: {gap:.3f} ({gap/centralized_results['f1']*100:.1f}% improvement)")
+    
+    print(f"\n✅ Centralized training completed!")
+    
+    return {
+        'per_user': per_user_results,
+        'centralized': centralized_results,
+        'performance_gap': gap
+    }
 if __name__ == "__main__":
     run_centralized_training()
