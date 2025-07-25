@@ -13,22 +13,26 @@ from sklearn.linear_model import LogisticRegression
 warnings.filterwarnings('ignore')
 import torch
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+from copy import deepcopy
 from sklearn.metrics import precision_recall_curve, f1_score
 
 import torch.nn as nn
 import torch.nn.functional as F
+from syft_utils import load_data, run_federated_training_with_syft,evaluate_model
+import threading
+
 
 class ScaffoldTrainer:
-    def __init__(self, client_datasets, model_class, rounds=10, epochs=5, lr=0.01):
+    def __init__(self, client_datasets, model_class,model_kwargs=None, rounds=10, epochs=5, lr=0.01):
         self.client_datasets = client_datasets
         self.model_class = model_class
         self.rounds = rounds
         self.epochs = epochs
+        self.model_kwargs = model_kwargs or {}
         self.lr = lr
 
         input_dim = list(client_datasets.values())[0]["X_train"].shape[1]
-        self.global_model = self.model_class(input_dim=input_dim)
+        self.global_model = self.model_class(**self.model_kwargs)
         self.c = self._init_control_variate()
 
     def _init_control_variate(self):
@@ -37,7 +41,7 @@ class ScaffoldTrainer:
         return zero_control
 
     def extract_weights(self, model):
-        if isinstance(model, PlainBiometricMLP):
+        if isinstance(model, (PlainBiometricMLP, BiometricHomomorphicMLP)):
             return {
                 "w1": model.w1.copy(),
                 "b1": model.b1.copy(),
@@ -47,10 +51,10 @@ class ScaffoldTrainer:
         elif isinstance(model, PlainLogisticRegression):
             return {"w": model.w.copy(), "b": model.b}
         else:
-            raise NotImplementedError("Unsupported model type")
+            raise NotImplementedError(f"Unsupported model type: {type(model)}")
 
     def update_weights(self, model, weights):
-        if isinstance(model, PlainBiometricMLP):
+        if isinstance(model, (PlainBiometricMLP, BiometricHomomorphicMLP)):
             model.w1 = weights["w1"]
             model.b1 = weights["b1"]
             model.w2 = weights["w2"]
@@ -59,7 +63,8 @@ class ScaffoldTrainer:
             model.w = weights["w"]
             model.b = weights["b"]
         else:
-            raise NotImplementedError("Unsupported model type")
+            raise NotImplementedError(f"Unsupported model type: {type(model)}")
+
 
     def copy_weights(self, src_model, dest_model):
         weights = self.extract_weights(src_model)
@@ -105,7 +110,7 @@ class ScaffoldTrainer:
 
             for client_id, data in self.client_datasets.items():
                 print(f"   - Training on {client_id} ({len(data['X_train'])} samples)")
-                local_model = self.model_class(input_dim=data["X_train"].shape[1])
+                local_model = self.model_class(**self.model_kwargs)
                 self.copy_weights(self.global_model, local_model)
 
                 # adjusted_weights = self.control_variate_subtract(
@@ -140,15 +145,14 @@ class ScaffoldTrainer:
 
 
 class FedAvgTrainer:
-    def __init__(self, client_datasets, model_class, rounds=10, epochs=5, lr=0.01):
+    def __init__(self, client_datasets, model_class, model_kwargs=None,rounds=10, epochs=5, lr=0.01):
         self.client_datasets = client_datasets
         self.model_class = model_class
+        self.model_kwargs = model_kwargs or {}
         self.rounds = rounds
         self.epochs = epochs
         self.lr = lr
-
-        input_dim = list(client_datasets.values())[0]["X_train"].shape[1]
-        self.global_model = self.model_class(input_dim=input_dim)
+        self.global_model = self.model_class(**self.model_kwargs)
 
     def extract_weights(self, model):
         if isinstance(model, PlainBiometricMLP):
@@ -160,8 +164,19 @@ class FedAvgTrainer:
             }
         elif isinstance(model, PlainLogisticRegression):
             return {"w": model.w.copy(), "b": model.b}
+        elif isinstance(model, BiometricHomomorphicLogisticRegression):
+            return {"w": model.w.copy(), "b": model.b}
+        
+        elif isinstance(model, BiometricHomomorphicMLP):  # 🔧 Add this block
+            return {
+                "w1": model.w1.copy(),
+                "b1": model.b1.copy(),
+                "w2": model.w2.copy(),
+                "b2": model.b2
+            }
         else:
             raise NotImplementedError("Unsupported model type")
+
 
     def update_weights(self, model, weights):
         if isinstance(model, PlainBiometricMLP):
@@ -172,8 +187,18 @@ class FedAvgTrainer:
         elif isinstance(model, PlainLogisticRegression):
             model.w = weights["w"]
             model.b = weights["b"]
+        elif isinstance(model, BiometricHomomorphicMLP):  # 🔧 Add this block
+            model.w1 = weights["w1"]
+            model.b1 = weights["b1"]
+            model.w2 = weights["w2"]
+            model.b2 = weights["b2"]
+        elif isinstance(model, BiometricHomomorphicLogisticRegression):  # 🔧 Add this!
+            model.w = weights["w"]
+            model.b = weights["b"]
+
         else:
             raise NotImplementedError("Unsupported model type")
+
 
     def copy_weights(self, src_model, dest_model):
         weights = self.extract_weights(src_model)
@@ -199,7 +224,8 @@ class FedAvgTrainer:
             for client_id, data in self.client_datasets.items():
                 print(f"   - Training on {client_id} ({len(data['X_train'])} samples)")
 
-                local_model = self.model_class(input_dim=data["X_train"].shape[1])
+                local_model = self.model_class(**self.model_kwargs)
+
                 self.copy_weights(self.global_model, local_model)
 
                 local_model.train(data["X_train"], data["y_train"], epochs=self.epochs, lr=self.lr, verbose=False)
@@ -264,93 +290,256 @@ class PlainLogisticRegression:
 
 
 class BiometricHomomorphicLogisticRegression:
-    def __init__(self, poly_modulus_degree=8192, scale=2**40):
-        # Initialize TenSEAL CKKS context
+    def __init__(self,input_dim, poly_modulus_degree=8192, scale=2**40):
+        """
+        Initialize TenSEAL CKKS context following best practices from official tutorials.
+        Based on TenSEAL Tutorial 1 - Logistic Regression on Encrypted Data
+        """
+        # Create context with proper coefficient modulus for multiple multiplications
         self.HE = ts.context(
             ts.SCHEME_TYPE.CKKS,
             poly_modulus_degree=poly_modulus_degree,
-            coeff_mod_bit_sizes=[60, 40, 40, 60],
+            coeff_mod_bit_sizes=[60, 40, 40, 60]  # Standard config for 2-3 multiplications
         )
         self.HE.global_scale = scale
         self.HE.generate_galois_keys()
         self.HE.generate_relin_keys()
-
+        
         self.is_trained = False
         self.scaler = StandardScaler()
         self.w = None
         self.b = None
-
+        self.scale = scale
+        self.input_dim = input_dim
+        self.init_weights()
+        
         print(f"🔐 Initialized Biometric Homomorphic Logistic Regression")
         print(f"   - Polynomial modulus degree: {poly_modulus_degree}")
-        print(f"   - Scale: {scale}")
-
+        print(f"   - Scale: 2^{int(np.log2(scale))}")
+        print(f"   - Coefficient modulus: [60, 40, 40, 60] bits")
+    
+    def init_weights(self):
+        """Initialize weights with small values instead of leaving them None"""
+        self.w = np.zeros(self.input_dim)
+        self.b = 0.0    
     def train_plaintext(self, X, y):
-        # Scale features
+        """Train plaintext logistic regression and store weights."""
+        # Normalize features to prevent overflow in HE operations
         X_scaled = self.scaler.fit_transform(X)
-        # Train sklearn logistic regression model to get weights
-        logreg = LogisticRegression(max_iter=1000)
+        
+        # Use regularization to keep weights small
+        logreg = LogisticRegression(max_iter=1000, random_state=42, C=10.0)
         logreg.fit(X_scaled, y)
 
-        self.w = logreg.coef_.flatten()  # shape (n_features,)
+        self.w = logreg.coef_.flatten()
         self.b = logreg.intercept_[0]
-        self.is_trained = True
 
-        print("✅ Plaintext logistic regression trained.")
-        print(f"   - Weights shape: {self.w.shape}")
+        # STRONGER clamp on max weight to protect HE inference
+        max_weight = np.max(np.abs(self.w))
+        if max_weight > 0.5:
+            scale_factor = 0.5 / max_weight
+            self.w *= scale_factor
+            self.b *= scale_factor
+            print(f"⚠️  Scaled down weights by {scale_factor:.3f} to prevent HE overflow")
+        
+        self.is_trained = True
+        print("✅ Plaintext logistic regression trained")
+        print(f"   - Weight range: [{np.min(self.w):.4f}, {np.max(self.w):.4f}]")
         print(f"   - Bias: {self.b:.4f}")
 
-    def encrypt_sample(self, sample):
-        # Encrypt feature vector sample
-        return ts.ckks_vector(self.HE, sample.tolist())
-
-    def sigmoid_approx(self, enc_x):
+    def polynomial_sigmoid(self, enc_x):
         """
-        Polynomial approx of sigmoid:
-        σ(x) ≈ 0.5 + 0.197*x  (linear, simple approx)
+        Polynomial approximation of sigmoid function.
+        Using degree-3 polynomial: σ(x) ≈ 0.5 + 0.197*x - 0.004*x^3
         
-        Or better cubic approx:
-        σ(x) ≈ 0.5 + 0.25*x - (1/48)*x^3
+        This is based on TenSEAL tutorial approach for sigmoid approximation.
         """
-        # Uncomment below for cubic approx:
-        # enc_x3 = enc_x * enc_x * enc_x
-        # return enc_x * 0.25 + ts.ckks_vector(self.HE, [0.5]) - enc_x3 * (1/48)
+        # Coefficient for linear term
+        coeff_1 = 0.197
+        # Coefficient for cubic term  
+        coeff_3 = 0.004
         
-        # For simplicity use linear approx here:
-        return enc_x * 0.197 + 0.5
+        # Compute x^3 (this uses 2 multiplication levels)
+        enc_x_squared = enc_x * enc_x
+        enc_x_cubed = enc_x_squared * enc_x
+        
+        # Polynomial: 0.5 + 0.197*x - 0.004*x^3
+        result = enc_x * coeff_1 - enc_x_cubed * coeff_3
+        result += 0.5
+        
+        return result
 
-    def predict_encrypted(self, X, threshold=0.5):
+    def simple_sigmoid(self, enc_x):
         """
-        Predict labels on encrypted inputs.
-        X: np.array of shape (n_samples, n_features)
-        Returns: (predictions, confidences)
+        Simple linear approximation: σ(x) ≈ 0.5 + 0.25*x
+        Uses only 1 multiplication level, safer for scale management.
+        """
+        return enc_x * 0.25 + 0.5
+    def train(self, X, y, epochs=1, lr=0.01, verbose=False):
+        """
+        Compatibility method for FedAvgTrainer.
+        Trains a plaintext logistic regression model and stores the weights.
+        """
+        if verbose:
+            print("🧪 Using plaintext training within homomorphic model wrapper.")
+        self.train_plaintext(X, y)
+    
+
+    def predict_encrypted(self, X, threshold=0.5, use_polynomial=False):
+        """
+        Perform encrypted inference following TenSEAL patterns.
+        
+        Args:
+            X: Input features
+            threshold: Classification threshold  
+            use_polynomial: If True, use degree-3 polynomial sigmoid, else linear
         """
         if not self.is_trained:
-            raise ValueError("Model not trained!")
-
-        # Scale features using stored scaler
+            raise ValueError("Model must be trained first!")
+        
+        # Scale inputs using the fitted scaler
         X_scaled = self.scaler.transform(X)
-
-        preds = []
-        confs = []
-
-        for i in range(len(X_scaled)):
+        
+        predictions = []
+        confidences = []
+        
+        print(f"🔐 Running encrypted inference on {len(X_scaled)} samples...")
+        print(f"   - Using {'polynomial' if use_polynomial else 'linear'} sigmoid approximation")
+        
+        for i, sample in enumerate(X_scaled):
             try:
-                enc_x = self.encrypt_sample(X_scaled[i])
-                # Dot product with plaintext weights + bias
-                enc_dot = enc_x.dot(self.w.tolist()) + self.b
-                # Apply sigmoid polynomial approx homomorphically
-                enc_conf = self.sigmoid_approx(enc_dot)
-                conf = enc_conf.decrypt()[0]
-                pred = 1 if conf > threshold else 0
-                preds.append(pred)
-                confs.append(conf)
+                # Step 1: Encrypt the input sample
+                enc_sample = ts.ckks_vector(self.HE, sample.tolist())
+                
+                # Step 2: Compute encrypted dot product w·x
+                enc_dot_product = enc_sample.dot(self.w.tolist())
+                
+                # Step 3: Add bias term
+                enc_logits = enc_dot_product + self.b
+                
+                # Step 4: Apply sigmoid approximation
+                if use_polynomial:
+                    enc_probability = self.polynomial_sigmoid(enc_logits)
+                else:
+                    enc_probability = self.simple_sigmoid(enc_logits)
+                
+                # Step 5: Decrypt the result
+                prob_decrypted = enc_probability.decrypt()
+                probability = prob_decrypted[0] if len(prob_decrypted) > 0 else 0.5
+                
+                # Clamp probability to valid range [0, 1]
+                probability = np.clip(probability, 0.0, 1.0)
+                
+                # Make binary prediction
+                prediction = 1 if probability > threshold else 0
+                
+                predictions.append(prediction)
+                confidences.append(probability)
+                
+                # Progress reporting
+                if (i + 1) % 100 == 0 or i == 0:
+                    print(f"   - Processed {i + 1}/{len(X_scaled)} samples")
+                    print(f"   - Sample {i}: logit≈{enc_dot_product.decrypt()[0] + self.b:.3f}, prob≈{probability:.3f}")
+                    
             except Exception as e:
-                print(f"Encryption/prediction error sample {i}: {e}")
-                preds.append(0)
-                confs.append(0.0)
+                print(f"⚠️  Error processing sample {i}: {str(e)[:100]}")
+                # Fallback to neutral prediction
+                predictions.append(0)
+                confidences.append(0.5)
+        
+        predictions = np.array(predictions)
+        confidences = np.array(confidences)
+        
+        print(f"✅ Encrypted inference completed")
+        print(f"   - Predictions: {np.sum(predictions)} positive out of {len(predictions)}")
+        print(f"   - Confidence range: [{np.min(confidences):.3f}, {np.max(confidences):.3f}]")
+        
+        return predictions, confidences
 
-        print(f"✅ Encrypted inference completed for {len(preds)} samples.")
-        return np.array(preds), np.array(confs)
+    def compare_with_plaintext(self, X_test, y_test=None):
+        """
+        Compare encrypted vs plaintext predictions for validation.
+        """
+        if not self.is_trained:
+            print("❌ Model not trained")
+            return
+            
+        print("\n🔍 Comparing Encrypted vs Plaintext Predictions...")
+        
+        # Get a small sample for comparison
+        n_samples = min(10, len(X_test))
+        X_sample = X_test[:n_samples]
+        
+        # Plaintext predictions
+        X_scaled = self.scaler.transform(X_sample)
+        plaintext_logits = X_scaled @ self.w + self.b
+        plaintext_probs = 1 / (1 + np.exp(-np.clip(plaintext_logits, -500, 500)))
+        plaintext_preds = (plaintext_probs > 0.5).astype(int)
+        
+        # Encrypted predictions (using simple sigmoid for stability)
+        enc_preds, enc_probs = self.predict_encrypted(X_sample, use_polynomial=False)
+        
+        print("\nComparison Results:")
+        print("Sample | Plaintext Prob | Encrypted Prob | Diff | Plain Pred | Enc Pred")
+        print("-" * 70)
+        
+        for i in range(n_samples):
+            diff = abs(plaintext_probs[i] - enc_probs[i])
+            print(f"{i:6d} | {plaintext_probs[i]:13.4f} | {enc_probs[i]:13.4f} | {diff:.4f} | "
+                  f"{plaintext_preds[i]:9d} | {enc_preds[i]:7d}")
+        
+        # Summary statistics
+        prob_mae = np.mean(np.abs(plaintext_probs - enc_probs))
+        pred_accuracy = np.mean(plaintext_preds == enc_preds)
+        
+        print(f"\nSummary:")
+        print(f"   - Mean Absolute Error (probabilities): {prob_mae:.4f}")
+        print(f"   - Prediction Agreement: {pred_accuracy:.1%}")
+        
+        if prob_mae > 0.1:
+            print("⚠️  Large probability differences detected - check HE parameters")
+        else:
+            print("✅ Good agreement between plaintext and encrypted predictions")
+
+    def test_he_operations(self):
+        """
+        Test basic HE operations to validate the setup.
+        """
+        print("\n🧪 Testing Homomorphic Encryption Operations...")
+        
+        try:
+            # Test basic vector operations
+            test_vec = [1.0, 2.0, 3.0]
+            enc_vec = ts.ckks_vector(self.HE, test_vec)
+            
+            # Test encryption/decryption
+            decrypted = enc_vec.decrypt()
+            print(f"   ✅ Encryption/Decryption: {test_vec} -> {[round(x, 3) for x in decrypted]}")
+            
+            # Test scalar multiplication
+            enc_scaled = enc_vec * 2.0
+            scaled_result = enc_scaled.decrypt()
+            print(f"   ✅ Scalar multiplication: {[round(x, 3) for x in scaled_result]}")
+            
+            # Test addition
+            enc_sum = enc_vec + 1.0
+            sum_result = enc_sum.decrypt()
+            print(f"   ✅ Scalar addition: {[round(x, 3) for x in sum_result]}")
+            
+            # Test polynomial evaluation (if we have weights)
+            if self.is_trained and len(self.w) >= 3:
+                test_weights = self.w[:3].tolist()
+                dot_result = enc_vec.dot(test_weights)
+                dot_decrypted = dot_result.decrypt()[0]
+                expected_dot = np.dot(test_vec, test_weights)
+                print(f"   ✅ Dot product: computed={dot_decrypted:.4f}, expected={expected_dot:.4f}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"   ❌ HE operation failed: {e}")
+            return False
+        
 
 class ImprovedPlainBiometricMLP(nn.Module):
     def __init__(self, input_dim, hidden_dim=64, dropout_p=0.3):
@@ -398,6 +587,7 @@ class ImprovedPlainBiometricMLP(nn.Module):
             outputs = self(X_t).cpu().numpy().flatten()
         preds = (outputs > 0.5).astype(int)
         return preds, outputs
+
 
 
 def get_ckks_context():
@@ -639,7 +829,19 @@ class BiometricHomomorphicMLP:
 
         self.is_trained = True
         print("✅ Encrypted training with decrypted gradients completed!")
-
+    def forward(self, X):
+        """Plain (non-encrypted) forward pass"""
+        z1 = np.dot(X, self.w1.T) + self.b1  # shape: (batch, hidden_dim)
+        a1 = np.maximum(0, z1)               # ReLU
+        logits = np.dot(a1, self.w2) + self.b2  # shape: (batch,)
+        return logits
+    
+    def predict(self, X):
+        """Plain inference, assumes weights are decrypted for evaluation"""
+        logits = self.forward(X)  # assuming you have a forward pass method
+        probs = self.sigmoid(logits)  # or softmax, depending on your task
+        preds = (probs > 0.5).astype(int)  # or use np.argmax for multi-class
+        return preds, probs
     def preprocess_biometric_data(self, data):
         print("📊 Preprocessing biometric data...")
         numeric_columns = data.select_dtypes(include=[np.number]).columns
@@ -745,6 +947,9 @@ class BiometricHomomorphicMLP:
         print(f"✅ Encrypted inference complete: {len(preds)} predictions made.")
         return np.array(preds).astype(int), np.array(confs)
 
+    def train(self, X, y, epochs=5, lr=0.005, verbose=False):
+        self.train_encrypted_with_decrypted_gradients(X, y, epochs=epochs, lr=lr)
+    
     def sigmoid(self, x):
         return 1 / (1 + np.exp(-x))
 
@@ -914,70 +1119,9 @@ class PlainBiometricMLP:
         return np.array(predictions), np.array(confidence_scores)
 
 
-def load_data():
-    """Load biometric dataset from Excel files"""
-    folder = "data/behaviour_biometrics_dataset/feature_kmt_dataset/feature_kmt_xlsx"
-    
-    print(f"📂 Loading data from: {folder}")
-    
-    dfs = []
-    for file in os.listdir(folder):
-        if file.endswith(".xlsx"):
-            try:
-                df = pd.read_excel(os.path.join(folder, file))
-                df["user_id"] = file.replace(".xlsx", "")
-                dfs.append(df)
-                print(f"   ✅ Loaded {file}: {len(df)} records")
-            except Exception as e:
-                print(f"   ❌ Error loading {file}: {e}")
-                continue
-    
-    data = pd.concat(dfs, ignore_index=True)
-    print(f"📊 Total loaded: {len(data)} biometric records from {len(dfs)} users")
-    return data
 
 
-def create_syft_dataset(df):
-    """Create Syft dataset for federated learning"""
-    dataset = sy.Dataset(
-        name="Biometric Dataset",
-        summary="User keystroke/mouse biometric data.",
-        description="Dataset with extracted biometric features for authentication."
-    )
-    
-    dataset.add_asset(
-        sy.Asset(
-            name="Biometric Data",
-            data=df,
-            mock=df.sample(frac=0.1) if len(df) > 10 else df
-        )
-    )
-    return dataset
 
-
-def start_server(port, df):
-    """Start Syft server"""
-    name = f"Factory{port - 55000}"
-
-    node = sy.orchestra.launch(name=name, port=port, reset=True, n_consumers=1, create_producer=True)
-    client = node.login(email="info@openmined.org", password="changethis")
-    client.settings.allow_guest_signup(True)
-
-    dataset = create_syft_dataset(df)
-    client.upload_dataset(dataset)
-
-    print(f"[{name}] running at {node.url}:{node.port} with {len(df)} records.")
-    return node, client
-
-
-def approve_requests(client):
-    """Approve requests automatically"""
-    while True:
-        for req in client.requests:
-            if req.status.value != 2:
-                req.approve(approve_nested=True)
-                print(f"Approved: {req.requesting_user_verify_key}")
-        sleep(5)
 
 def normalize_confidences(confidences):
     """
@@ -1005,79 +1149,6 @@ def evaluate_biometric_model(y_true, y_pred_conf, confidence, threshold=0.5):
         "avg_confidence": np.mean(confidence),
         "confidence_std": np.std(confidence)
     }
-
-
-
-import threading
-
-def run_federated_training_with_syft(data, ports=None):
-    """Run federated training setup with Syft for N clients (default 8)"""
-
-    if ports is None:
-        ports = [55000 + i for i in range(8)]  # Default to ports 55000–55007
-
-    print(f"🌐 Setting up federated training with {len(ports)} clients")
-
-    # Shuffle and split user_ids evenly among clients
-    users = data["user_id"].unique()
-    np.random.seed(42)
-    np.random.shuffle(users)
-    user_splits = np.array_split(users, len(ports))
-
-    # Create dataframes for each client
-    dfs = [data[data["user_id"].isin(split)] for split in user_splits]
-
-    servers = []
-    clients = []
-
-    for i, (port, df) in enumerate(zip(ports, dfs)):
-        print(f"🚀 Starting server for Client {i} on port {port}")
-        try:
-            server, client = start_server(port, df)
-            servers.append(server)
-            clients.append(client)
-            threading.Thread(target=approve_requests, args=(client,), daemon=True).start()
-        except Exception as e:
-            print(f"❌ Failed to start server {i} on port {port}: {e}")
-
-    sleep(5)  # Wait a bit longer for more clients to initialize
-
-    client_datasets = {}
-
-    for i, client in enumerate(clients):
-        try:
-            df = client.datasets.get_all()[0].assets[0].data
-
-            y = df["label"].values
-            X = df.drop(columns=["label", "user_id"], errors="ignore")
-            X = X.apply(pd.to_numeric, errors="coerce").dropna().values
-            y = y[:len(X)]
-
-            scaler = StandardScaler()
-            X_scaled = scaler.fit_transform(X)
-
-            X_train, X_test, y_train, y_test = train_test_split(
-                X_scaled, y, test_size=0.2, random_state=42, stratify=y
-            )
-
-            client_datasets[f"Client{i}"] = {
-                "X_train": X_train,
-                "y_train": y_train,
-                "X_test": X_test,
-                "y_test": y_test,
-                "port": ports[i],
-                "num_users": len(user_splits[i])
-            }
-
-            print(f"✅ Client{i}: {len(X_train)} train, {len(X_test)} test samples")
-
-        except Exception as e:
-            print(f"❌ Failed to process data for Client{i}: {e}")
-            continue
-
-    return client_datasets
-
-
 
 def compare_plain_vs_encrypted_federated():
     """Federated comparison between plain and encrypted MLP using Syft"""
@@ -1277,23 +1348,26 @@ def compare_plain_vs_encrypted_federated():
     print("\n✅ Federated Biometric Authentication Comparison Completed")
     print("=" * 70)
 
+from sklearn.neural_network import MLPClassifier
+
 def run_centralized_training():
-    print("🧠 Centralized Training with Encrypted BiometricHomomorphicMLP and Logistic Regression")
-    print("=" * 60)
+    print("🧠 Centralized Training with Encrypted & Plain Biometric MLP + Logistic Regression")
+    print("=" * 70)
 
     # Load and preprocess data
     data = load_data()
     print(f"\n📊 Loaded {len(data)} biometric records from {data['user_id'].nunique()} users")
 
-    # Initialize your encrypted MLP model
+    # Define input dimension for models
     input_dim = len(data.select_dtypes(include=[np.number]).columns)
     hidden_dim = 64
-    model = BiometricHomomorphicMLP(input_dim=input_dim, hidden_dim=hidden_dim)
 
-    # Preprocess data inside the model (scaling + label encoding)
-    X, y = model.preprocess_biometric_data(data)
+    # ===========================
+    # Preprocess data (shared)
+    # ===========================
+    encrypted_model = BiometricHomomorphicMLP(input_dim=input_dim, hidden_dim=hidden_dim)
+    X, y = encrypted_model.preprocess_biometric_data(data)
 
-    # Train/test split
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
@@ -1301,109 +1375,178 @@ def run_centralized_training():
     print(f"   - Training samples: {len(X_train)}")
     print(f"   - Test samples: {len(X_test)}")
 
-    # Train your encrypted MLP (training uses encrypted forward pass with decrypted gradients)
-    model.train_encrypted_with_decrypted_gradients(X_train, y_train, epochs=30, lr=0.01)
+    # ===========================
+    # 🔐 Encrypted MLP Training
+    # ===========================
+    encrypted_model.train_encrypted_with_decrypted_gradients(X_train, y_train, epochs=30, lr=0.01)
+    mlp_pred_enc, mlp_conf_enc = encrypted_model.authenticate_encrypted(X_test, threshold=0.55)
+    mlp_enc_metrics = evaluate_biometric_model(y_test, mlp_pred_enc, mlp_conf_enc)
 
-    # Encrypted inference on test data
-    mlp_pred, mlp_conf = model.authenticate_encrypted(X_test, threshold=0.55)
+    # ===========================
+    # 🧠 Plain MLP Training
+    # ===========================
+    plain_mlp = MLPClassifier(hidden_layer_sizes=(hidden_dim,), max_iter=300, random_state=42)
+    plain_mlp.fit(X_train, y_train)
+    mlp_conf_plain = plain_mlp.predict_proba(X_test)[:, 1]
+    mlp_pred_plain = (mlp_conf_plain > 0.5).astype(int)
+    mlp_plain_metrics = evaluate_biometric_model(y_test, mlp_pred_plain, mlp_conf_plain)
 
-    # Evaluate encrypted MLP
-    mlp_metrics = evaluate_biometric_model(y_test, mlp_pred, mlp_conf)
-
-    # For comparison, train Logistic Regression on plaintext data
+    # ===========================
+    # 🟩 Logistic Regression (Plaintext)
+    # ===========================
     logreg = LogisticRegression(max_iter=1000)
     logreg.fit(X_train, y_train)
     logreg_conf = logreg.predict_proba(X_test)[:, 1]
     logreg_pred = (logreg_conf > 0.5).astype(int)
     logreg_metrics = evaluate_biometric_model(y_test, logreg_pred, logreg_conf)
 
-    # Print results
-    print("\n📈 Evaluation Results (Centralized with Encryption)")
-    print("🔐 BiometricHomomorphicMLP (Encrypted):")
-    for k, v in mlp_metrics.items():
+    # ===========================
+    # 🔐 Logistic Regression (Encrypted)
+    # ===========================
+    he_logreg = BiometricHomomorphicLogisticRegression()
+    he_logreg.train_plaintext(X_train, y_train)
+    preds_enc, confs_enc =  he_logreg.predict_encrypted(X_test, use_polynomial=False)
+    logreg_enc_metrics = evaluate_biometric_model(y_test, preds_enc, confs_enc)
+
+    # ===========================
+    # 📊 Print Results
+    # ===========================
+    print("\n📈 Evaluation Results (Centralized Setup)")
+    
+    print("\n🔐 BiometricHomomorphicMLP (Encrypted):")
+    for k, v in mlp_enc_metrics.items():
         print(f"   {k}: {v:.4f}")
 
-    print("\n🟩 Logistic Regression (Plaintext):")
+    print("\n🧠 MLPClassifier (Plain):")
+    for k, v in mlp_plain_metrics.items():
+        print(f"   {k}: {v:.4f}")
+
+    print("\n🟩 Logistic Regression (Plain):")
     for k, v in logreg_metrics.items():
         print(f"   {k}: {v:.4f}")
 
-    # Initialize
-    he_logreg = BiometricHomomorphicLogisticRegression()
-
-    # Train on plaintext data
-    he_logreg.train_plaintext(X_train, y_train)
-
-    # Predict on encrypted test data
-    preds_enc, confs_enc = he_logreg.predict_encrypted(X_test)
-
-    # Evaluate
-    metrics = evaluate_biometric_model(y_test, preds_enc, confs_enc)
-    print("\n🔐 Logistic Regression (Encrypted) Results:")
-    for k, v in metrics.items():
+    print("\n🔐 Logistic Regression (Encrypted):")
+    for k, v in logreg_enc_metrics.items():
         print(f"   {k}: {v:.4f}")
 
+    print("\n✅ Centralized Training Completed")
+    print("=" * 70)
 
-    print("\n✅ Centralized Training with Encryption Completed")
-    print("=" * 60)
 
-def evaluate_model(model, client_datasets):
-    # Collect all test data from all clients
-    X_test_all = np.vstack([data["X_test"] for data in client_datasets.values()])
-    y_test_all = np.hstack([data["y_test"] for data in client_datasets.values()])
-
-    preds, confs = model.predict(X_test_all)
-
-    accuracy = accuracy_score(y_test_all, preds)
-    precision = precision_score(y_test_all, preds, zero_division=0)
-    recall = recall_score(y_test_all, preds, zero_division=0)
-    f1 = f1_score(y_test_all, preds, zero_division=0)
-    avg_conf = np.mean(confs)
-    conf_std = np.std(confs)
-
-    return {
-        "accuracy": accuracy,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-        "avg_confidence": avg_conf,
-        "confidence_std": conf_std,
-    }
 
 if __name__ == "__main__":
     # run_centralized_training()
     # compare_plain_vs_encrypted_federated()
+    
     # Load your centralized data first
     data = load_data()
-
     client_datasets = run_federated_training_with_syft(data)
-
-    
+   
     for i, data in enumerate(client_datasets.values()):
         print(f"Client {i} label distribution: {np.bincount(data['y_train'])}")
+    
+    sample_client_data = next(iter(client_datasets.values()))
+    input_dim = sample_client_data['X_train'].shape[1]
+    
+
+# if __name__ == "__main__":
+
+    # run_centralized_training()
+    # compare_plain_vs_encrypted_federated()
+    # Load your centralized data first
+    # data = load_data()
+
+    # client_datasets = run_federated_training_with_syft(data)
+
+    
+    # for i, data in enumerate(client_datasets.values()):
+    #     print(f"Client {i} label distribution: {np.bincount(data['y_train'])}")
 
 
-    print("\n=== FedAvg with MLP ===")
-    fedavg_mlp = FedAvgTrainer(client_datasets, PlainBiometricMLP, rounds=20, epochs=10, lr=0.01)
-    global_mlp = fedavg_mlp.train()
-    metrics_mlp_fedavg = evaluate_model(global_mlp, client_datasets)
-    print("FedAvg MLP Metrics:", metrics_mlp_fedavg)
+    # sample_client_data = next(iter(client_datasets.values()))
+    # input_dim = sample_client_data['X_train'].shape[1]
 
-    print("\n=== Scaffold with MLP ===")
-    scaffold_mlp = ScaffoldTrainer(client_datasets, PlainBiometricMLP, rounds=20, epochs=10, lr=0.01)
-    global_mlp_scaffold = scaffold_mlp.train()
-    metrics_mlp_scaffold = evaluate_model(global_mlp_scaffold, client_datasets)
-    print("Scaffold MLP Metrics:", metrics_mlp_scaffold)
+    # print("\n=== FedAvg with MLP ===")
+    # fedavg_mlp = FedAvgTrainer(client_datasets, PlainBiometricMLP, model_kwargs={'input_dim': input_dim}, rounds=20, epochs=10, lr=0.01)
+    # global_mlp = fedavg_mlp.train()
+    # metrics_mlp_fedavg = evaluate_model(global_mlp, client_datasets)
+    # print("FedAvg MLP Metrics:", metrics_mlp_fedavg)
+
+    # print("\n=== Scaffold with MLP ===")
+    # scaffold_mlp = ScaffoldTrainer(client_datasets, PlainBiometricMLP, rounds=20, epochs=10, lr=0.01)
+    # global_mlp_scaffold = scaffold_mlp.train()
+    # metrics_mlp_scaffold = evaluate_model(global_mlp_scaffold, client_datasets)
+    # print("Scaffold MLP Metrics:", metrics_mlp_scaffold)
 
 
-    print("\n=== FedAvg with Logistic Regression ===")
-    fedavg_logreg = FedAvgTrainer(client_datasets, PlainLogisticRegression, rounds=10, epochs=5, lr=0.01)
-    global_logreg = fedavg_logreg.train()
-    metrics_logreg_fedavg = evaluate_model(global_logreg, client_datasets)
-    print("FedAvg Logistic Regression Metrics:", metrics_logreg_fedavg)
+    # print("\n=== FedAvg with Logistic Regression ===")
+    # fedavg_logreg = FedAvgTrainer(client_datasets, PlainLogisticRegression, model_kwargs={'input_dim': input_dim}, rounds=10, epochs=5, lr=0.01)
+    # global_logreg = fedavg_logreg.train()
+    # metrics_logreg_fedavg = evaluate_model(global_logreg, client_datasets)
+    # print("FedAvg Logistic Regression Metrics:", metrics_logreg_fedavg)
 
-    print("\n=== Scaffold with Logistic Regression ===")
-    scaffold_logreg = ScaffoldTrainer(client_datasets, PlainLogisticRegression, rounds=10, epochs=5, lr=0.01)
-    global_logreg_scaffold = scaffold_logreg.train()
-    metrics_logreg_scaffold = evaluate_model(global_logreg_scaffold, client_datasets)
-    print("Scaffold Logistic Regression Metrics:", metrics_logreg_scaffold)
+    # print("\n=== Scaffold with Logistic Regression ===")
+    # scaffold_logreg = ScaffoldTrainer(client_datasets, PlainLogisticRegression, rounds=10, epochs=5, lr=0.01)
+    # global_logreg_scaffold = scaffold_logreg.train()
+    # metrics_logreg_scaffold = evaluate_model(global_logreg_scaffold, client_datasets)
+    # print("Scaffold Logistic Regression Metrics:", metrics_logreg_scaffold)
+    # print("\n🌐=== Federated Learning with Homomorphic Encryption ===")
 
+
+
+    # print("\n=== FedAvg with Homomorphic MLP ===")
+    # fedavg_he_mlp = FedAvgTrainer(client_datasets,BiometricHomomorphicMLP,model_kwargs={'input_dim': input_dim,'hidden_dim': 64},rounds=10,epochs=10, lr=0.01)
+    # global_he_mlp = fedavg_he_mlp.train()
+    # metrics_he_mlp_fedavg = evaluate_model(global_he_mlp, client_datasets)
+    # print("FedAvg HE MLP Metrics:", metrics_he_mlp_fedavg)
+
+
+    # print("\n=== Scaffold with Homomorphic MLP ===")
+    # scaffold_he_mlp = ScaffoldTrainer(client_datasets, BiometricHomomorphicMLP,model_kwargs={'input_dim': input_dim,'hidden_dim': 64}, rounds=2, epochs=10, lr=0.01)
+    # global_he_mlp_scaffold = scaffold_he_mlp.train()
+    # metrics_he_mlp_scaffold = evaluate_model(global_he_mlp_scaffold, client_datasets)
+    # print("Scaffold HE MLP Metrics:", metrics_he_mlp_scaffold)
+
+    # =============================
+    # 🔐 FedAvg - Homomorphic Logistic Regression
+    # =============================
+    # print("\n=== FedAvg with Homomorphic Logistic Regression ===")
+
+    # # Step 1: Train using FedAvg
+    # fedavg_he_logreg = FedAvgTrainer(
+    #     client_datasets,
+    #     BiometricHomomorphicLogisticRegression,
+    #     model_kwargs={'input_dim': input_dim},
+    #     rounds=10,
+    #     epochs=5,
+    #     lr=0.01
+    # )
+    # global_he_logreg = fedavg_he_logreg.train()
+
+    # # Step 2: Combine all test data from clients
+    # X_test_all = np.vstack([client_data['test'][0] for client_data in client_datasets.values()])
+    # y_test_all = np.hstack([client_data['test'][1] for client_data in client_datasets.values()])
+
+    # # Step 3: Fit scaler (required for inference)
+    # global_he_logreg.scaler = StandardScaler()
+    # global_he_logreg.scaler.fit(X_test_all)
+
+    # # Step 4: Predict on encrypted data
+    # preds_enc, confs_enc = global_he_logreg.predict_encrypted(X_test_all, use_polynomial=False)
+
+    # # Step 5: Evaluate
+    # metrics_he_logreg_fedavg = evaluate_biometric_model(y_test_all, preds_enc, confs_enc)
+    # print("FedAvg HE Logistic Regression Metrics:", metrics_he_logreg_fedavg)
+
+
+    # =============================
+    # 🔐 Scaffold - Homomorphic Logistic Regression
+    # =============================
+    # print("\n=== Scaffold with Homomorphic Logistic Regression ===")
+    # scaffold_he_logreg = ScaffoldTrainer(client_datasets, BiometricHomomorphicLogisticRegression, model_kwargs={'input_dim': input_dim}, rounds=10, epochs=5, lr=0.01)
+    # global_he_logreg_scaffold = scaffold_he_logreg.train()
+    # metrics_he_logreg_scaffold = evaluate_model(global_he_logreg_scaffold, client_datasets)
+    # print("Scaffold HE Logistic Regression Metrics:", metrics_he_logreg_scaffold)
+
+    # print("\n✅ Federated Training with Homomorphic Encryption Completed")
+    # Initialize FedAvg trainer with encrypted logistic regression

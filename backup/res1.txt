@@ -1,0 +1,31 @@
+🔐 BiometricHomomorphicMLP (Encrypted):
+   accuracy: 0.4574
+   precision: 0.4409
+   recall: 0.3182
+   f1: 0.3696
+   avg_confidence: 0.4600
+   confidence_std: 0.2162
+
+🧠 MLPClassifier (Plain):
+   accuracy: 0.7585
+   precision: 0.7826
+   recall: 0.7159
+   f1: 0.7478
+   avg_confidence: 0.4902
+   confidence_std: 0.2816
+
+🟩 Logistic Regression (Plain):
+   accuracy: 0.7188
+   precision: 0.7016
+   recall: 0.7614
+   f1: 0.7302
+   avg_confidence: 0.4921
+   confidence_std: 0.2012
+
+🔐 Logistic Regression (Encrypted):
+   accuracy: 0.7188
+   precision: 0.7016
+   recall: 0.7614
+   f1: 0.7302
+   avg_confidence: 0.4765
+   confidence_std: 0.2352
