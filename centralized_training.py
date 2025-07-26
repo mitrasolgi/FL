@@ -448,6 +448,13 @@ class SimpleEncryptedMLP:
             print("✅ Predictions completed!")
         return np.array(predictions), np.array(confidences)
 
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.neural_network import MLPClassifier
+from sklearn.linear_model import LogisticRegression
+import numpy as np
+
 def run_centralized_training():
     print("🧠 Centralized Training - Essential Methods")
     print("=" * 50)
@@ -459,103 +466,108 @@ def run_centralized_training():
     feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg']
     
     # ===========================
-    # Method 1: Per-User Individual Models
+    # Method 1: Per-User Individual Models (MLP & Logistic Regression)
     # ===========================
     print("\n👤 Per-User Individual Models:")
-    
-    acc_list = []
-    f1_list = []
+
+    # Lists to store per-user metrics for MLP and Logistic Regression separately
+    mlp_metrics = {'accuracy': [], 'precision': [], 'recall': [], 'f1': []}
+    logreg_metrics = {'accuracy': [], 'precision': [], 'recall': [], 'f1': []}
     
     for user in data['user_id'].unique():
-        # Get data for this specific user
         user_data = data[data['user_id'] == user].copy()
         
-            
-        # Prepare features and labels
         X = user_data[feature_columns].fillna(user_data[feature_columns].mean())
         y = user_data['label'].values
         
         if len(np.unique(y)) < 2:
             continue
-            
-        # Scale and split
+        
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
         X_train, X_test, y_train, y_test = train_test_split(
             X_scaled, y, test_size=0.2, random_state=42, stratify=y
         )
         
-        # Train Decision Tree
-        from sklearn.tree import DecisionTreeClassifier
-        clf = DecisionTreeClassifier(random_state=42)
-        clf.fit(X_train, y_train)
+        # --- MLP ---
+        mlp = MLPClassifier(hidden_layer_sizes=(64, 32), max_iter=1000, random_state=42)
+        mlp.fit(X_train, y_train)
+        y_pred_mlp = mlp.predict(X_test)
+        mlp_metrics['accuracy'].append(accuracy_score(y_test, y_pred_mlp))
+        mlp_metrics['precision'].append(precision_score(y_test, y_pred_mlp, zero_division=0))
+        mlp_metrics['recall'].append(recall_score(y_test, y_pred_mlp, zero_division=0))
+        mlp_metrics['f1'].append(f1_score(y_test, y_pred_mlp, zero_division=0))
         
-        # Predict and evaluate
-        y_pred = clf.predict(X_test)
-        acc = accuracy_score(y_test, y_pred)
-        f1 = f1_score(y_test, y_pred, zero_division=0)
-        
-        acc_list.append(acc)
-        f1_list.append(f1)
+        # --- Logistic Regression ---
+        logreg = LogisticRegression(max_iter=1000, random_state=42)
+        logreg.fit(X_train, y_train)
+        y_pred_logreg = logreg.predict(X_test)
+        logreg_metrics['accuracy'].append(accuracy_score(y_test, y_pred_logreg))
+        logreg_metrics['precision'].append(precision_score(y_test, y_pred_logreg, zero_division=0))
+        logreg_metrics['recall'].append(recall_score(y_test, y_pred_logreg, zero_division=0))
+        logreg_metrics['f1'].append(f1_score(y_test, y_pred_logreg, zero_division=0))
     
-    per_user_results = {
-        'accuracy': np.mean(acc_list),
-        'f1': np.mean(f1_list),
-        'accuracy_std': np.std(acc_list),
-        'f1_std': np.std(f1_list)
-    }
+    # Average per-user results
+    def avg_metrics(metrics_dict):
+        return {k: np.mean(v) for k, v in metrics_dict.items()}
+    
+    per_user_mlp_results = avg_metrics(mlp_metrics)
+    per_user_logreg_results = avg_metrics(logreg_metrics)
     
     # ===========================
-    # Method 2: True Centralized
+    # Method 2: True Centralized MLP
     # ===========================
-    print("🌐 True Centralized:")
+    print("\n🌐 True Centralized MLP:")
     
-    # Prepare all data together
     X_all = data[feature_columns].fillna(data[feature_columns].mean())
     y_all = data['label'].values
     
-    # Scale and split
     scaler_all = StandardScaler()
     X_all_scaled = scaler_all.fit_transform(X_all)
     X_train_all, X_test_all, y_train_all, y_test_all = train_test_split(
         X_all_scaled, y_all, test_size=0.2, random_state=42, stratify=y_all
     )
     
-    # Train MLP (best performer from previous results)
-    mlp = MLPClassifier(hidden_layer_sizes=(64, 32), max_iter=1000, random_state=42)
-    mlp.fit(X_train_all, y_train_all)
+    mlp_centralized = MLPClassifier(hidden_layer_sizes=(64, 32), max_iter=1000, random_state=42)
+    mlp_centralized.fit(X_train_all, y_train_all)
     
-    # Predict and evaluate
-    y_pred = mlp.predict(X_test_all)
-    y_prob = mlp.predict_proba(X_test_all)[:, 1]
-    centralized_results = evaluate_biometric_model(y_test_all, y_pred, y_prob)
+    y_pred_centralized = mlp_centralized.predict(X_test_all)
+    y_prob_centralized = mlp_centralized.predict_proba(X_test_all)[:, 1]
+    centralized_results = evaluate_biometric_model(y_test_all, y_pred_centralized, y_prob_centralized)
     
     # ===========================
-    # Results
+    # Results Summary
     # ===========================
     print("\n📈 Results Summary")
     print("=" * 30)
     
-    print(f"\n👤 Per-User Approach (Average across {len(acc_list)} users):")
-    for k, v in per_user_results.items():
+    print(f"\n👤 Per-User MLP (Average across {len(mlp_metrics['accuracy'])} users):")
+    for k, v in per_user_mlp_results.items():
+        print(f"   {k}: {v:.4f}")
+    
+    print(f"\n👤 Per-User Logistic Regression (Average across {len(logreg_metrics['accuracy'])} users):")
+    for k, v in per_user_logreg_results.items():
         print(f"   {k}: {v:.4f}")
     
     print(f"\n🌐 Centralized MLP:")
     for k, v in centralized_results.items():
         print(f"   {k}: {v:.4f}")
     
-    print(f"\n📊 Performance Gap:")
-    gap = per_user_results['f1'] - centralized_results['f1']
-    print(f"   Per-User F1: {per_user_results['f1']:.3f}")
-    print(f"   Centralized F1: {centralized_results['f1']:.3f}")
-    print(f"   Gap: {gap:.3f} ({gap/centralized_results['f1']*100:.1f}% improvement)")
+    # Performance gap MLP
+    gap = per_user_mlp_results['f1'] - centralized_results['f1']
+    print(f"\n📊 Performance Gap (Per-User MLP vs Centralized MLP):")
+    print(f"   Per-User MLP F1: {per_user_mlp_results['f1']:.3f}")
+    print(f"   Centralized MLP F1: {centralized_results['f1']:.3f}")
+    print(f"   Gap: {gap:.3f} ({gap/centralized_results['f1']*100:.1f}% difference)")
     
     print(f"\n✅ Centralized training completed!")
     
     return {
-        'per_user': per_user_results,
-        'centralized': centralized_results,
+        'per_user_mlp': per_user_mlp_results,
+        'per_user_logreg': per_user_logreg_results,
+        'centralized_mlp': centralized_results,
         'performance_gap': gap
     }
+
 if __name__ == "__main__":
     run_centralized_training()
