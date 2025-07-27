@@ -36,7 +36,7 @@ def run_quick_demo():
     
     # Load and prepare data
     data = load_data()
-    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg']
+    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg','hold_mean', 'hold_std','flight_mean', 'flight_std']
     client_datasets = prepare_federated_datasets(data, feature_columns, num_clients=2)
     
     print(f"\n📊 Demo setup: {len(client_datasets)} clients")
@@ -78,7 +78,7 @@ def run_encryption_comparison():
     
     # Load data
     data = load_data()
-    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg']
+    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg','hold_mean', 'hold_std','flight_mean', 'flight_std']
     client_datasets = prepare_federated_datasets(data, feature_columns, num_clients=3)
     
     results = {}
@@ -159,7 +159,7 @@ def run_algorithm_comparison():
     
     # Load data
     data = load_data()
-    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg']
+    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg','hold_mean', 'hold_std','flight_mean', 'flight_std']
     client_datasets = prepare_federated_datasets(data, feature_columns, num_clients=3)
     
     # Model to test
@@ -546,7 +546,7 @@ def run_custom_experiment(model_name, algorithm, num_clients=3, num_rounds=5, ep
     
     # Load and prepare data
     data = load_data()
-    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg']
+    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg','hold_mean', 'hold_std','flight_mean', 'flight_std']
     client_datasets = prepare_federated_datasets(data, feature_columns, num_clients=num_clients)
     
     # Initialize trainer
@@ -606,7 +606,7 @@ def benchmark_scalability():
     print("=" * 40)
     
     data = load_data()
-    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg']
+    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg','hold_mean', 'hold_std','flight_mean', 'flight_std']
     
     client_counts = [2, 3, 4, 5]
     results = {}
@@ -801,7 +801,7 @@ def run_performance_benchmarks():
     print("=" * 40)
     
     data = load_data()
-    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg']
+    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg','hold_mean', 'hold_std','flight_mean', 'flight_std']
     client_datasets = prepare_federated_datasets(data, feature_columns, num_clients=3)
     
     benchmarks = {}

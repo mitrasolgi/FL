@@ -202,7 +202,7 @@ def run_simple_federated_demo(num_clients=3):
     try:
         # Load and prepare data
         data = load_data()
-        feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg']
+        feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg','hold_mean', 'hold_std','flight_mean', 'flight_std']
         
         # Prepare federated datasets using the fixed approach
         client_datasets = prepare_simple_federated_datasets(data, feature_columns, num_clients)
@@ -408,7 +408,7 @@ def setup_custom_distributed_clients(num_clients, base_port=55000):
         data = load_data()
         
         # Use our fixed data preparation
-        feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg']
+        feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg','hold_mean', 'hold_std','flight_mean', 'flight_std']
         client_datasets = prepare_simple_federated_datasets(data, feature_columns, num_clients)
         
         if not client_datasets:

@@ -200,7 +200,7 @@ class FixedFrameworkTester:
         try:
             # Load data and create federated datasets
             data = load_data()
-            feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg']
+            feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg','hold_mean', 'hold_std','flight_mean', 'flight_std']
             
             # Test with different client counts
             for num_clients in [2, 3, 4]:
@@ -296,7 +296,7 @@ class FixedFrameworkTester:
             # and verifies no critical errors occur
             
             data = load_data()
-            feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg']
+            feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg','hold_mean', 'hold_std','flight_mean', 'flight_std']
             client_datasets = prepare_federated_datasets(data, feature_columns, num_clients=3)
             
             if not client_datasets:

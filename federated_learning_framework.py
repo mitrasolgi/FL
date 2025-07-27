@@ -780,7 +780,7 @@ def run_comprehensive_federated_experiments():
     
     # Load data
     data = load_data()
-    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg']
+    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg','hold_mean', 'hold_std','flight_mean', 'flight_std']
     
     # Prepare federated datasets
     client_datasets = prepare_federated_datasets(data, feature_columns, num_clients=4)

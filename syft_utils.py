@@ -263,7 +263,7 @@ def run_federated_training_with_syft(data, ports=None):
     print(f"🌐 Setting up federated training with {len(ports)} clients")
     
     # Clean data first
-    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg']
+    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg','hold_mean', 'hold_std','flight_mean', 'flight_std']
     data_clean = data.dropna(subset=feature_columns + ['label']).reset_index(drop=True)
     
     print(f"📊 Clean data: {len(data_clean)} samples")
