@@ -24,6 +24,15 @@ from syft_utils import load_data, run_federated_training_with_syft, evaluate_mod
 import threading
 from sklearn.ensemble import RandomForestClassifier
 import json
+import random 
+
+def set_seed(seed=42):
+    np.random.seed(seed)
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+
+set_seed(42)
+
 
 class BiometricHomomorphicLogisticRegression:
     """FIXED Homomorphic Logistic Regression with comprehensive error handling"""
@@ -258,7 +267,7 @@ class BiometricHomomorphicLogisticRegression:
             print("\n🔍 Comparing Encrypted vs Plaintext Predictions...")
             
             # Get a small sample for comparison
-            n_samples = min(5, len(X_test))  # Small sample for testing
+            n_samples =  len(X_test)  # Small sample for testing
             X_sample = X_test[:n_samples]
             
             # Plaintext predictions
@@ -487,7 +496,7 @@ def run_centralized_training():
         hom_logreg.test_he_operations()
 
         # Test on a small subset first
-        n_test = min(50, len(X_test_all))
+        n_test = len(X_test_all)
         y_pred_hom, y_conf_hom = hom_logreg.predict_encrypted(
             X_test_all[:n_test], threshold=0.5, use_polynomial=False
         )
@@ -508,7 +517,7 @@ def run_centralized_training():
         enc_mlp_central.train(X_train_all, y_train_all, epochs=3, verbose=True)
 
         # Test on small subset
-        n_test = min(20, len(X_test_all))
+        n_test = len(X_test_all)
         y_pred_enc_central, y_conf_enc_central = enc_mlp_central.predict_encrypted(
             X_test_all[:n_test], verbose=True
         )
