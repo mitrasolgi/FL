@@ -62,9 +62,9 @@ def run_distributed_federated_learning(num_clients=3):
         # FIXED: Test model combinations with conservative settings
         models = [
             ("LogisticRegression", LogisticRegression, {'C': 0.1, 'max_iter': 1000}, "Plain"),
-            ("MLPClassifier", MLPClassifier, {'hidden_layer_sizes': (16, 8), 'max_iter': 100}, "Plain"),
+            ("MLPClassifier", MLPClassifier, {'hidden_layer_sizes': (32, 16), 'max_iter': 100}, "Plain"),
             ("HomomorphicLogisticRegression", BiometricHomomorphicLogisticRegression, 
-             {'poly_modulus_degree': 8192, 'scale': 2**30}, "Encrypted"),
+             {'poly_modulus_degree': 8192, 'scale': 2**40}, "Encrypted"),
             ("EncryptedMLP", TrulyEncryptedMLP, {'hidden_dim': 8}, "Encrypted")
         ]
         
