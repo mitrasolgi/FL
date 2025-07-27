@@ -26,6 +26,7 @@ from sklearn.ensemble import RandomForestClassifier
 import json
 import random 
 from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import cross_val_score
 
 def set_seed(seed=42):
     np.random.seed(seed)
@@ -425,7 +426,14 @@ def run_centralized_training():
     
     # Load data
     data = load_data()
-    feature_columns = ['dwell_avg', 'flight_avg', 'traj_avg']
+    feature_columns = [
+        'dwell_avg', 'flight_avg', 'traj_avg',
+        'hold_mean', 'hold_std',
+        'flight_mean', 'flight_std'
+    ]
+
+
+
 
     # Print dataset statistics
     y_all = data['label'].values
@@ -487,6 +495,7 @@ def run_centralized_training():
         print(f"❌ LogReg failed: {e}")
         centralized_logreg_results = {"error": str(e)}
 
+
     # --- Fixed Homomorphic Logistic Regression ---
     print("\n🔐 Training Fixed Homomorphic Logistic Regression...")
     try:
@@ -531,14 +540,19 @@ def run_centralized_training():
     except Exception as e:
         print(f"❌ Encrypted MLP failed: {e}")
         centralized_encrypted_results = {"error": str(e)}
+    X = data[feature_columns].fillna(0)
+    y = data['label']
 
+    rf = RandomForestClassifier(n_estimators=100, random_state=42)
+    scores = cross_val_score(rf, X, y, cv=5, scoring='f1')
+    print("Random Forest 5-fold F1 scores:", scores)
+    print("Mean F1:", scores.mean())
     # Save all results
     all_results = {
         'centralized_mlp': centralized_mlp_results,
         'centralized_logreg': centralized_logreg_results,
         'centralized_encrypted_logreg': homomorphic_results,
-        'centralized_encrypted_mlp': centralized_encrypted_results
-    }
+        'centralized_encrypted_mlp': centralized_encrypted_results    }
 
     # Save to file
     with open("centralized_results.json", "w") as f:

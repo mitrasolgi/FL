@@ -10,6 +10,9 @@ from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 import tenseal as ts
+import json
+from datetime import datetime
+from dateutil import parser
 
 def get_ckks_context():
     """Get CKKS context with conservative settings for stability"""
@@ -24,95 +27,56 @@ def get_ckks_context():
     context.generate_relin_keys()
     return context, poly_modulus_degree
 
+
+
+
 def load_data():
-    """Load biometric dataset from Excel files with comprehensive error handling"""
-    folder = "data/behaviour_biometrics_dataset/feature_kmt_dataset/feature_kmt_xlsx"
+    folder = "data/behaviour_biometrics_dataset/feature_kmt_dataset/custom_feature_kmt_xlsx"
     print(f"📂 Loading data from: {folder}")
 
     if not os.path.exists(folder):
-        print(f"❌ Data folder not found: {folder}")
-        print("📝 Creating synthetic data for testing...")
-        return create_synthetic_biometric_data()
+        raise FileNotFoundError(f"❌ Data folder not found: {folder}")
 
     dfs = []
+    required_cols = ['dwell_avg', 'flight_avg', 'traj_avg', 'hold_mean', 'hold_std', 'flight_mean', 'flight_std']
+
     for file in os.listdir(folder):
         if file.endswith(".xlsx"):
             try:
-                df = pd.read_excel(os.path.join(folder, file))
-                df["user_id"] = file.replace(".xlsx", "")
-                
-                # Ensure required columns exist
-                required_cols = ['dwell_avg', 'flight_avg', 'traj_avg']
-                if not all(col in df.columns for col in required_cols):
-                    print(f"⚠️ {file} missing required columns, skipping...")
+                file_path = os.path.join(folder, file)
+                df = pd.read_excel(file_path)
+                user_id = file.replace(".xlsx", "")
+                df["user_id"] = user_id
+
+                missing_cols = [col for col in required_cols if col not in df.columns]
+                if missing_cols:
+                    print(f"⚠️ {file} missing columns {missing_cols}, skipping...")
                     continue
-                
-                # Add label column if missing (binary classification)
+
                 if 'label' not in df.columns:
-                    # Create balanced synthetic labels
                     df['label'] = np.random.randint(0, 2, len(df))
-                
+
                 dfs.append(df)
                 print(f"   ✅ Loaded {file}: {len(df)} records")
-                
+
             except Exception as e:
                 print(f"   ❌ Error loading {file}: {e}")
                 continue
 
     if not dfs:
-        print("❌ No valid data files found, creating synthetic data...")
-        return create_synthetic_biometric_data()
+        raise ValueError("❌ No valid data files found. Please check your data folder and files.")
 
     data = pd.concat(dfs, ignore_index=True)
-    
-    # Clean the data
-    data = clean_biometric_data(data)
-    
+
+    # Optional cleaning if you have this function
+    if 'clean_biometric_data' in globals():
+        data = clean_biometric_data(data)
+
     print(f"📊 Total loaded: {len(data)} biometric records from {len(dfs)} users")
     print(f"   Class distribution: {dict(zip(*np.unique(data['label'], return_counts=True)))}")
-    
+
     return data
 
-def create_synthetic_biometric_data(num_users=10, samples_per_user=100):
-    """Create synthetic biometric data for testing when real data is unavailable"""
-    print("🔧 Creating synthetic biometric dataset...")
-    
-    np.random.seed(42)
-    
-    all_data = []
-    
-    for user_id in range(num_users):
-        # Create user-specific patterns
-        base_dwell = np.random.uniform(80, 150)  # ms
-        base_flight = np.random.uniform(50, 120)  # ms
-        base_traj = np.random.uniform(0.1, 0.9)   # normalized
-        
-        # Generate samples for this user
-        dwell_times = np.random.normal(base_dwell, 20, samples_per_user)
-        flight_times = np.random.normal(base_flight, 15, samples_per_user)
-        traj_scores = np.random.normal(base_traj, 0.1, samples_per_user)
-        
-        # Create balanced labels (authentication success/failure)
-        labels = np.concatenate([
-            np.zeros(samples_per_user // 2),  # Legitimate user
-            np.ones(samples_per_user - samples_per_user // 2)  # Attacker
-        ])
-        np.random.shuffle(labels)
-        
-        user_data = pd.DataFrame({
-            'dwell_avg': np.clip(dwell_times, 20, 300),
-            'flight_avg': np.clip(flight_times, 10, 200),
-            'traj_avg': np.clip(traj_scores, 0, 1),
-            'label': labels.astype(int),  # Ensure integer labels
-            'user_id': f"user_{user_id:02d}"
-        })
-        
-        all_data.append(user_data)
-    
-    data = pd.concat(all_data, ignore_index=True)
-    print(f"✅ Created {len(data)} synthetic samples for {num_users} users")
-    print(f"   Class distribution: {dict(zip(*np.unique(data['label'], return_counts=True)))}")
-    return data
 
 def clean_biometric_data(data):
     """Clean and validate biometric data"""

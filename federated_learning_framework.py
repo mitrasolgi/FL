@@ -793,7 +793,7 @@ def run_comprehensive_federated_experiments():
     model_configs = {
         'MLPClassifier': {
             'class': MLPClassifier,
-            'params': {'hidden_layer_sizes': (16, 8), 'max_iter': 1000, 'alpha': 0.01}
+            'params': {'hidden_layer_sizes': (64, 32), 'max_iter': 1000, 'alpha': 0.01}
         },
         'LogisticRegression': {
             'class': LogisticRegression,
@@ -805,7 +805,7 @@ def run_comprehensive_federated_experiments():
         },
         'EncryptedMLP': {
             'class': TrulyEncryptedMLP,
-            'params': {'hidden_dim': 32}
+            'params': {'hidden_dim': 64}
         }
     }
     
