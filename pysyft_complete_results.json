@@ -9,7 +9,7 @@
                 "avg_confidence": 0.49713254840135507,
                 "confidence_std": 0.026880262819032982
             },
-            "training_time": 0.12759137153625488,
+            "training_time": 0.13599753379821777,
             "num_clients": 4,
             "encryption_type": "Plain",
             "accuracy": 0.49096385542168675,
@@ -25,9 +25,9 @@
                 "recall": 0.5548780487804879,
                 "f1": 0.5185185185185185,
                 "avg_confidence": 0.49713254840135507,
-                "confidence_std": 0.02688026281903298
+                "confidence_std": 0.026880262819032982
             },
-            "training_time": 0.13038182258605957,
+            "training_time": 0.12807106971740723,
             "num_clients": 4,
             "encryption_type": "Plain",
             "accuracy": 0.49096385542168675,
@@ -47,7 +47,7 @@
                 "avg_confidence": 0.4942611452816807,
                 "confidence_std": 0.03436045812315193
             },
-            "training_time": 2.664407253265381,
+            "training_time": 2.665733575820923,
             "num_clients": 4,
             "encryption_type": "Plain",
             "accuracy": 0.5060240963855421,
@@ -65,7 +65,7 @@
                 "avg_confidence": 0.4942611452816807,
                 "confidence_std": 0.03436045812315193
             },
-            "training_time": 2.6813151836395264,
+            "training_time": 2.89202880859375,
             "num_clients": 4,
             "encryption_type": "Plain",
             "accuracy": 0.5060240963855421,
@@ -78,75 +78,75 @@
     "HomomorphicLogisticRegression": {
         "FedAvg": {
             "metrics": {
-                "accuracy": 0.4789156626506024,
-                "precision": 0.45544554455445546,
-                "recall": 0.2804878048780488,
-                "f1": 0.3471698113207548,
-                "avg_confidence": 0.49999947111824417,
-                "confidence_std": 1.0002720247349065e-06
+                "accuracy": 0.49698795180722893,
+                "precision": 0.36363636363636365,
+                "recall": 0.024390243902439025,
+                "f1": 0.04571428571428571,
+                "avg_confidence": 0.49999911473841274,
+                "confidence_std": 4.833583980379077e-07
             },
-            "training_time": 18.93252468109131,
+            "training_time": 18.69598889350891,
             "num_clients": 4,
             "encryption_type": "Encrypted",
-            "accuracy": 0.4789156626506024,
-            "f1_score": 0.3471698113207548,
-            "precision": 0.45544554455445546,
-            "recall": 0.2804878048780488,
+            "accuracy": 0.49698795180722893,
+            "f1_score": 0.04571428571428571,
+            "precision": 0.36363636363636365,
+            "recall": 0.024390243902439025,
             "status": "success"
         },
         "SCAFFOLD": {
             "metrics": {
-                "accuracy": 0.5060240963855421,
-                "precision": 0.5,
-                "recall": 0.006097560975609756,
-                "f1": 0.012048192771084338,
-                "avg_confidence": 0.4999992294917552,
-                "confidence_std": 3.288041149144908e-07
+                "accuracy": 0.4879518072289157,
+                "precision": 0.43478260869565216,
+                "recall": 0.12195121951219512,
+                "f1": 0.19047619047619044,
+                "avg_confidence": 0.49999874489806817,
+                "confidence_std": 1.1369064368254848e-06
             },
-            "training_time": 19.480367183685303,
+            "training_time": 18.866729736328125,
             "num_clients": 4,
             "encryption_type": "Encrypted",
-            "accuracy": 0.5060240963855421,
-            "f1_score": 0.012048192771084338,
-            "precision": 0.5,
-            "recall": 0.006097560975609756,
+            "accuracy": 0.4879518072289157,
+            "f1_score": 0.19047619047619044,
+            "precision": 0.43478260869565216,
+            "recall": 0.12195121951219512,
             "status": "success"
         }
     },
     "EncryptedMLP": {
         "FedAvg": {
             "metrics": {
-                "accuracy": 0.4939759036144578,
-                "precision": 0.4857142857142857,
-                "recall": 0.4146341463414634,
-                "f1": 0.4473684210526316,
-                "avg_confidence": 0.49998946963790497,
-                "confidence_std": 0.00011731265728596485
+                "accuracy": 0.5030120481927711,
+                "precision": 0.49645390070921985,
+                "recall": 0.4268292682926829,
+                "f1": 0.45901639344262296,
+                "avg_confidence": 0.49999334137678675,
+                "confidence_std": 0.00011735850795679307
             },
-            "training_time": 6.6221582889556885,
+            "training_time": 6.560837268829346,
             "num_clients": 4,
             "encryption_type": "Encrypted",
-            "accuracy": 0.4939759036144578,
-            "f1_score": 0.4473684210526316,
-            "precision": 0.4857142857142857,
-            "recall": 0.4146341463414634,
+            "accuracy": 0.5030120481927711,
+            "f1_score": 0.45901639344262296,
+            "precision": 0.49645390070921985,
+            "recall": 0.4268292682926829,
             "status": "success"
         },
         "SCAFFOLD": {
             "metrics": {
-                "accuracy": 0.4819277108433735,
-                "precision": 0.47368421052631576,
+                "accuracy": 0.4789156626506024,
+                "precision": 0.47058823529411764,
                 "recall": 0.43902439024390244,
-                "f1": 0.4556962025316456,
-                "avg_confidence": 0.49999596656501144,
-                "confidence_std": 8.691261501025585e-05
+                "f1": 0.45425867507886436,
+                "avg_confidence": 0.49999692678754415,
+                "confidence_std": 8.585507731672969e-05
             },
-            "training_time": 6.7759668827056885,
+            "training_time": 6.5638427734375,
             "num_clients": 4,
             "encryption_type": "Encrypted",
-            "accuracy": 0.4819277108433735,
-            "f1_score": 0.4556962025316456,
-            "precision": 0.47368421052631576,
+            "accuracy": 0.4789156626506024,
+            "f1_score": 0.45425867507886436,
+            "precision": 0.47058823529411764,
             "recall": 0.43902439024390244,
             "status": "success"
         }
