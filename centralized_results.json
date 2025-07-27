@@ -1,0 +1,34 @@
+{
+    "centralized_mlp": {
+        "accuracy": 0.5468277945619335,
+        "precision": 0.5423728813559322,
+        "recall": 0.5818181818181818,
+        "f1": 0.5614035087719298,
+        "avg_confidence": 0.5004440833856976,
+        "confidence_std": 0.1485789178726502
+    },
+    "centralized_logreg": {
+        "accuracy": 0.513595166163142,
+        "precision": 0.51,
+        "recall": 0.6181818181818182,
+        "f1": 0.5589041095890411,
+        "avg_confidence": 0.49652838049495535,
+        "confidence_std": 0.03294526554654717
+    },
+    "centralized_encrypted_logreg": {
+        "accuracy": 0.48,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "avg_confidence": 0.4999611810406394,
+        "confidence_std": 1.5014585672051223e-05
+    },
+    "centralized_encrypted_mlp": {
+        "accuracy": 0.5,
+        "precision": 0.5263157894736842,
+        "recall": 0.9090909090909091,
+        "f1": 0.6666666666666666,
+        "avg_confidence": 0.5000778617813191,
+        "confidence_std": 8.867315075943754e-05
+    }
+}

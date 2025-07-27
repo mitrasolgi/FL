@@ -15,12 +15,13 @@ import torch
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from sklearn.metrics import precision_recall_curve, f1_score
-
+from sklearn.linear_model import LogisticRegression
+from sklearn.neural_network import MLPClassifier
 import torch.nn as nn
 import torch.nn.functional as F
 from syft_utils import load_data, run_federated_training_with_syft,evaluate_model,get_ckks_context
 import threading
-
+import json
 class BiometricHomomorphicLogisticRegression:
     def __init__(self,input_dim, poly_modulus_degree=8192, scale=2**40):
         """
@@ -942,28 +943,139 @@ if __name__ == "__main__":
     sample_client_data = next(iter(client_datasets.values()))
     input_dim = sample_client_data['X_train'].shape[1]
 
-    print("\n=== FedAvg with MLP ===")
+    # print("\n=== FedAvg with MLP ===")
     fedavg_mlp = FedAvgTrainer(client_datasets, PlainBiometricMLP, model_kwargs={'input_dim': input_dim}, rounds=20, epochs=10, lr=0.01)
     global_mlp = fedavg_mlp.train()
     metrics_mlp_fedavg = evaluate_model(global_mlp, client_datasets)
-    print("FedAvg MLP Metrics:", metrics_mlp_fedavg)
+    # print("FedAvg MLP Metrics:", metrics_mlp_fedavg)
 
     print("\n=== Scaffold with MLP ===")
-    scaffold_mlp = ScaffoldTrainer(client_datasets, PlainBiometricMLP, rounds=20, epochs=10, lr=0.01)
+    scaffold_mlp = ScaffoldTrainer(client_datasets, PlainBiometricMLP, model_kwargs={'input_dim': input_dim}, rounds=20, epochs=10, lr=0.01)
     global_mlp_scaffold = scaffold_mlp.train()
     metrics_mlp_scaffold = evaluate_model(global_mlp_scaffold, client_datasets)
-    print("Scaffold MLP Metrics:", metrics_mlp_scaffold)
+    # print("Scaffold MLP Metrics:", metrics_mlp_scaffold)
 
 
-    print("\n=== FedAvg with Logistic Regression ===")
+    # print("\n=== FedAvg with Logistic Regression ===")
     fedavg_logreg = FedAvgTrainer(client_datasets, PlainLogisticRegression, model_kwargs={'input_dim': input_dim}, rounds=10, epochs=5, lr=0.01)
     global_logreg = fedavg_logreg.train()
     metrics_logreg_fedavg = evaluate_model(global_logreg, client_datasets)
-    print("FedAvg Logistic Regression Metrics:", metrics_logreg_fedavg)
+    # print("FedAvg Logistic Regression Metrics:", metrics_logreg_fedavg)
 
-    print("\n=== Scaffold with Logistic Regression ===")
-    scaffold_logreg = ScaffoldTrainer(client_datasets, PlainLogisticRegression, rounds=10, epochs=5, lr=0.01)
+    # print("\n=== Scaffold with Logistic Regression ===")
+    scaffold_logreg = ScaffoldTrainer(client_datasets, PlainLogisticRegression, model_kwargs={'input_dim': input_dim}, rounds=10, epochs=5, lr=0.01)
     global_logreg_scaffold = scaffold_logreg.train()
     metrics_logreg_scaffold = evaluate_model(global_logreg_scaffold, client_datasets)
-    print("Scaffold Logistic Regression Metrics:", metrics_logreg_scaffold)
-    print("\n🌐=== Federated Learning with Homomorphic Encryption ===")
+    print("\n🔐=== Federated Learning with Homomorphic Encryption ===")
+    
+    # Test 1: FedAvg with Homomorphic Logistic Regression
+    print("\n=== FedAvg with Homomorphic Logistic Regression ===")
+    try:
+        fedavg_he_logreg = FedAvgTrainer(
+            client_datasets, 
+            BiometricHomomorphicLogisticRegression, 
+            model_kwargs={'input_dim': input_dim}, 
+            rounds=5,  # Reduced rounds for HE (computationally expensive)
+            epochs=3,  # Reduced epochs for HE
+            lr=0.01
+        )
+        global_he_logreg = fedavg_he_logreg.train()
+        metrics_he_logreg_fedavg = evaluate_model(global_he_logreg, client_datasets)
+        print("✅ FedAvg HE Logistic Regression Metrics:", metrics_he_logreg_fedavg)
+    except Exception as e:
+        print(f"❌ FedAvg HE Logistic Regression failed: {e}")
+        metrics_he_logreg_fedavg = {"error": str(e)}
+    
+    # Test 2: Scaffold with Homomorphic Logistic Regression
+    print("\n=== Scaffold with Homomorphic Logistic Regression ===")
+    try:
+        scaffold_he_logreg = ScaffoldTrainer(
+            client_datasets, 
+            BiometricHomomorphicLogisticRegression, 
+            model_kwargs={'input_dim': input_dim}, 
+            rounds=5, 
+            epochs=3, 
+            lr=0.01
+        )
+        global_he_logreg_scaffold = scaffold_he_logreg.train()
+        metrics_he_logreg_scaffold = evaluate_model(global_he_logreg_scaffold, client_datasets)
+        print("✅ Scaffold HE Logistic Regression Metrics:", metrics_he_logreg_scaffold)
+    except Exception as e:
+        print(f"❌ Scaffold HE Logistic Regression failed: {e}")
+        metrics_he_logreg_scaffold = {"error": str(e)}
+    
+    # Test 3: FedAvg with Homomorphic MLP
+    print("\n=== FedAvg with Homomorphic MLP ===")
+    try:
+        fedavg_he_mlp = FedAvgTrainer(
+            client_datasets, 
+            BiometricHomomorphicMLP, 
+            model_kwargs={'input_dim': input_dim, 'hidden_dim': 16},  # Smaller hidden dim for HE
+            rounds=3,  # Even fewer rounds for MLP HE
+            epochs=2, 
+            lr=0.005
+        )
+        global_he_mlp = fedavg_he_mlp.train()
+        metrics_he_mlp_fedavg = evaluate_model(global_he_mlp, client_datasets)
+        print("✅ FedAvg HE MLP Metrics:", metrics_he_mlp_fedavg)
+    except Exception as e:
+        print(f"❌ FedAvg HE MLP failed: {e}")
+        metrics_he_mlp_fedavg = {"error": str(e)}
+    
+    # Test 4: Scaffold with Homomorphic MLP
+    print("\n=== Scaffold with Homomorphic MLP ===")
+    try:
+        scaffold_he_mlp = ScaffoldTrainer(
+            client_datasets, 
+            BiometricHomomorphicMLP, 
+            model_kwargs={'input_dim': input_dim, 'hidden_dim': 16}, 
+            rounds=3, 
+            epochs=2, 
+            lr=0.005
+        )
+        global_he_mlp_scaffold = scaffold_he_mlp.train()
+        metrics_he_mlp_scaffold = evaluate_model(global_he_mlp_scaffold, client_datasets)
+        print("✅ Scaffold HE MLP Metrics:", metrics_he_mlp_scaffold)
+    except Exception as e:
+        print(f"❌ Scaffold HE MLP failed: {e}")
+        metrics_he_mlp_scaffold = {"error": str(e)}
+    
+    # Test 5: Demonstration of encrypted inference
+    print("\n🔍=== Encrypted Inference Demonstration ===")
+    try:
+        # Use one of the trained HE models for encrypted inference demo
+        if 'global_he_logreg' in locals() and global_he_logreg.is_trained:
+            print("Testing encrypted inference with HE Logistic Regression...")
+            
+            # Get a small test sample
+            test_client = list(client_datasets.keys())[0]
+            X_test_sample = client_datasets[test_client]['X_test'][:5]  # Just 5 samples
+            y_test_sample = client_datasets[test_client]['y_test'][:5]
+            
+            # Compare plaintext vs encrypted predictions
+            global_he_logreg.compare_with_plaintext(X_test_sample, y_test_sample)
+            
+            # Run encrypted predictions
+            enc_preds, enc_confs = global_he_logreg.predict_encrypted(X_test_sample, use_polynomial=False)
+            print(f"Encrypted predictions: {enc_preds}")
+            print(f"Encrypted confidences: {enc_confs}")
+            
+    except Exception as e:
+        print(f"❌ Encrypted inference demo failed: {e}")
+    
+    # Compile all results including HE
+    all_results = {
+        "FedAvg_MLP": metrics_mlp_fedavg,
+        "Scaffold_MLP": metrics_mlp_scaffold,
+        "FedAvg_LogisticRegression": metrics_logreg_fedavg,
+        "Scaffold_LogisticRegression": metrics_logreg_scaffold,
+        "FedAvg_HE_LogisticRegression": metrics_he_logreg_fedavg,
+        "Scaffold_HE_LogisticRegression": metrics_he_logreg_scaffold,
+        "FedAvg_HE_MLP": metrics_he_mlp_fedavg,
+        "Scaffold_HE_MLP": metrics_he_mlp_scaffold,
+    }
+    
+    # Save comprehensive results
+    with open("comprehensive_federated_learning_results.json", "w") as f:
+        json.dump(all_results, f, indent=4)
+
