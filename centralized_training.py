@@ -464,7 +464,7 @@ def run_centralized_training():
     # --- Centralized MLP ---
     print("\n🧠 Training Centralized MLP...")
     try:
-        mlp_centralized = MLPClassifier(hidden_layer_sizes=(32, 16), max_iter=1000, random_state=42,learning_rate_init=0.005)
+        mlp_centralized = MLPClassifier(hidden_layer_sizes=(32, 16), max_iter=1000, random_state=42)
         mlp_centralized.fit(X_train_all, y_train_all)
         y_pred_centralized = mlp_centralized.predict(X_test_all)
         y_prob_centralized = mlp_centralized.predict_proba(X_test_all)[:, 1]
@@ -491,7 +491,7 @@ def run_centralized_training():
     print("\n🔐 Training Fixed Homomorphic Logistic Regression...")
     try:
         hom_logreg = BiometricHomomorphicLogisticRegression(
-            input_dim=input_dim, poly_modulus_degree=8192, scale=2**35
+            input_dim=32, poly_modulus_degree=8192, scale=2**40
         )
         hom_logreg.train_plaintext(X_train_all, y_train_all)
         hom_logreg.test_he_operations()
@@ -514,7 +514,7 @@ def run_centralized_training():
     # --- Fixed Encrypted MLP ---
     print("\n🔐 Training Fixed Encrypted MLP...")
     try:
-        enc_mlp_central = TrulyEncryptedMLP(input_dim, hidden_dim=8)
+        enc_mlp_central = TrulyEncryptedMLP(input_dim, hidden_dim=32)
         enc_mlp_central.train(X_train_all, y_train_all, epochs=3, verbose=True)
 
         # Test on small subset

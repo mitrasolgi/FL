@@ -793,7 +793,7 @@ def run_comprehensive_federated_experiments():
     model_configs = {
         'MLPClassifier': {
             'class': MLPClassifier,
-            'params': {'hidden_layer_sizes': (16, 8), 'max_iter': 100, 'alpha': 0.01}
+            'params': {'hidden_layer_sizes': (16, 8), 'max_iter': 1000, 'alpha': 0.01}
         },
         'LogisticRegression': {
             'class': LogisticRegression,
@@ -801,18 +801,18 @@ def run_comprehensive_federated_experiments():
         },
         'HomomorphicLogisticRegression': {
             'class': BiometricHomomorphicLogisticRegression,
-            'params': {'poly_modulus_degree': 8192, 'scale': 2**30}
+            'params': {'poly_modulus_degree': 8192, 'scale': 2**40}
         },
         'EncryptedMLP': {
             'class': TrulyEncryptedMLP,
-            'params': {'hidden_dim': 8}
+            'params': {'hidden_dim': 32}
         }
     }
     
     # Training configurations
     training_configs = {
-        'FedAvg': {'algorithm': 'fedavg', 'rounds': 6, 'epochs': 3},
-        'SCAFFOLD': {'algorithm': 'scaffold', 'rounds': 6, 'epochs': 3, 'lr': 0.05}
+        'FedAvg': {'algorithm': 'fedavg', 'rounds': 20, 'epochs': 10},
+        'SCAFFOLD': {'algorithm': 'scaffold', 'rounds': 20, 'epochs': 10, 'lr': 0.01}
     }
     
     results = {}
