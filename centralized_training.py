@@ -25,6 +25,7 @@ import threading
 from sklearn.ensemble import RandomForestClassifier
 import json
 import random 
+from sklearn.model_selection import GridSearchCV
 
 def set_seed(seed=42):
     np.random.seed(seed)
@@ -147,7 +148,7 @@ class BiometricHomomorphicLogisticRegression:
         Uses only 1 multiplication level for maximum stability
         """
         try:
-            return enc_x * 0.15 + 0.5  # Conservative coefficient for stability
+            return enc_x * 0.3 + 0.5  # Conservative coefficient for stability
         except Exception as e:
             print(f"⚠️ Simple sigmoid error: {e}")
             return self.ultra_simple_sigmoid(enc_x)
@@ -463,7 +464,7 @@ def run_centralized_training():
     # --- Centralized MLP ---
     print("\n🧠 Training Centralized MLP...")
     try:
-        mlp_centralized = MLPClassifier(hidden_layer_sizes=(32, 16), max_iter=500, random_state=42)
+        mlp_centralized = MLPClassifier(hidden_layer_sizes=(32, 16), max_iter=1000, random_state=42,learning_rate_init=0.005)
         mlp_centralized.fit(X_train_all, y_train_all)
         y_pred_centralized = mlp_centralized.predict(X_test_all)
         y_prob_centralized = mlp_centralized.predict_proba(X_test_all)[:, 1]
