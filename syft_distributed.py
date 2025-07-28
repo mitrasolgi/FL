@@ -16,7 +16,18 @@ import threading
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.preprocessing import StandardScaler
 import warnings
+import random 
+import os
+
 warnings.filterwarnings('ignore')
+
+
+def set_seed(seed=42):
+    np.random.seed(seed)
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+
+set_seed(42)
 
 def run_distributed_federated_learning(num_clients=3):
     """FIXED distributed federated learning with comprehensive error handling"""
@@ -62,7 +73,7 @@ def run_distributed_federated_learning(num_clients=3):
         # FIXED: Test model combinations with conservative settings
         models = [
             ("LogisticRegression", LogisticRegression, {'C': 0.1, 'max_iter': 1000}, "Plain"),
-            ("MLPClassifier", MLPClassifier, {'hidden_layer_sizes': (32, 16), 'max_iter': 100}, "Plain"),
+            ("MLPClassifier", MLPClassifier, {'hidden_layer_sizes': (16, 8), 'max_iter': 100}, "Plain"),
             ("HomomorphicLogisticRegression", BiometricHomomorphicLogisticRegression, 
              {'poly_modulus_degree': 8192, 'scale': 2**40}, "Encrypted"),
             ("EncryptedMLP", TrulyEncryptedMLP, {'hidden_dim': 8}, "Encrypted")
