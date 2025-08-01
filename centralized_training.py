@@ -40,7 +40,7 @@ set_seed(42)
 class BiometricHomomorphicLogisticRegression:
     """FIXED Homomorphic Logistic Regression with comprehensive error handling"""
     
-    def __init__(self, input_dim, poly_modulus_degree=4096, scale=2**25):
+    def __init__(self, input_dim, poly_modulus_degree=4096, scale=2**40):
         """Initialize with conservative settings for stability"""
         try:
             # FIXED: More conservative settings for reliability
@@ -463,39 +463,7 @@ class BiometricHomomorphicLogisticRegression:
         # Train on encrypted data
         self.train_encrypted(X_encrypted, y_encrypted, epochs=1, verbose=False)
         return self
-    def test_he_operations(self):
-        """Test basic HE operations to validate the setup"""
-        print("\n🧪 Testing Homomorphic Encryption Operations...")
-        
-        try:
-            # Test basic vector operations
-            test_vec = [1.0, 2.0, 3.0]
-            enc_vec = ts.ckks_vector(self.HE, test_vec)
-            
-            # Test encryption/decryption
-            decrypted = enc_vec.decrypt()
-            print(f"   ✅ Encryption/Decryption: {test_vec} -> {[round(x, 3) for x in decrypted]}")
-            
-            # Test scalar multiplication
-            enc_scaled = enc_vec * 2.0
-            scaled_result = enc_scaled.decrypt()
-            print(f"   ✅ Scalar multiplication: {[round(x, 3) for x in scaled_result]}")
-            
-            # Test addition
-            enc_sum = enc_vec + 1.0
-            sum_result = enc_sum.decrypt()
-            print(f"   ✅ Scalar addition: {[round(x, 3) for x in sum_result]}")
-            
-            # Test sigmoid approximations
-            test_logit = ts.ckks_vector(self.HE, [0.5])
-            simple_result = self.simple_sigmoid(test_logit).decrypt()[0]
-            print(f"   ✅ Simple sigmoid(0.5): {simple_result:.4f}")
-            
-            return True
-            
-        except Exception as e:
-            print(f"   ❌ HE operation failed: {e}")
-            return False
+
 
 
 
@@ -609,7 +577,7 @@ class TrulyEncryptedMLP:
     
     def train_encrypted(self, X_encrypted: List[ts.CKKSTensor],
                     y_encrypted: List[ts.CKKSTensor],
-                    epochs: int = 1, lr: float = 0.01, verbose: bool = True):
+                    epochs: int = 10, lr: float = 0.01, verbose: bool = True):
         """Train using encrypted data (actually uses the encrypted data)."""
         if verbose:
             print(f"🔐 Training on encrypted data for {epochs} epochs...")
@@ -1042,7 +1010,6 @@ def run_centralized_training():
         
         # Train on encrypted data
         hom_logreg.train_encrypted(X_train_encrypted, y_train_encrypted, epochs=10, verbose=True)
-        hom_logreg.test_he_operations()
         
         # Test on a small subset first
         n_test = len(X_test_all)
@@ -1101,8 +1068,10 @@ def run_centralized_training():
     for model_name, results in all_results.items():
         if 'error' not in results:
             print(f"{model_name}:")
-            print(f"  Accuracy: {results['accuracy']:.3f}")
-            print(f"  F1 Score: {results['f1']:.3f}")
+            print(f"  Accuracy : {results['accuracy']:.3f}")
+            print(f"  Precision: {results['precision']:.3f}")
+            print(f"  Recall   : {results['recall']:.3f}")
+            print(f"  F1 Score : {results['f1']:.3f}")
         else:
             print(f"{model_name}: FAILED - {results['error']}")
 
