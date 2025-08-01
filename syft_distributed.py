@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-Fixed PySyft Distributed Federated Learning Example
-Demonstrates how to use real distributed clients with PySyft with comprehensive error handling
-"""
-
 import numpy as np
 from syft_utils import run_federated_training_with_syft, load_data
 from federated_learning_framework import FedAvgTrainer, SCAFFOLDTrainer
@@ -18,6 +12,7 @@ from sklearn.preprocessing import StandardScaler
 import warnings
 import random 
 import os
+import pandas as pd
 
 warnings.filterwarnings('ignore')
 
@@ -74,7 +69,7 @@ def run_distributed_federated_learning(num_clients=3):
         models = [
             ("LogisticRegression", LogisticRegression, {'C': 0.1, 'max_iter': 1000}, "Plain"),
             ("MLPClassifier", MLPClassifier, {'hidden_layer_sizes': (16, 8), 'max_iter': 100}, "Plain"),
-            ("HomomorphicLogisticRegression", BiometricHomomorphicLogisticRegression, 
+            ("EncryptedLogisticRegression", BiometricHomomorphicLogisticRegression, 
              {'poly_modulus_degree': 8192, 'scale': 2**40}, "Encrypted"),
             ("EncryptedMLP", TrulyEncryptedMLP, {'hidden_dim': 8}, "Encrypted")
         ]
@@ -97,8 +92,8 @@ def run_distributed_federated_learning(num_clients=3):
                         )
                         global_model, history = trainer.train_federated(
                             client_datasets,
-                            num_rounds=4,  # Reduced for faster testing
-                            epochs_per_round=2,
+                            num_rounds=10,  # Reduced for faster testing
+                            epochs_per_round=5,
                             verbose=True
                         )
                     else:  # SCAFFOLD
@@ -108,8 +103,8 @@ def run_distributed_federated_learning(num_clients=3):
                         )
                         global_model, history = trainer.train_federated(
                             client_datasets,
-                            num_rounds=4,
-                            epochs_per_round=2,
+                            num_rounds=10,
+                            epochs_per_round=5,
                             lr=0.05,
                             verbose=True
                         )
@@ -173,37 +168,37 @@ def run_distributed_federated_learning(num_clients=3):
 def print_pysyft_summary_table(results):
     """Print comprehensive summary table for PySyft results"""
     print("\n📊 PYSYFT DISTRIBUTED FEDERATED LEARNING SUMMARY")
-    print("=" * 85)
+    print("=" * 115)
     
-    print(f"{'Model':<25} {'Algorithm':<10} {'Type':<10} {'Accuracy':<10} {'F1':<10} {'Time(s)':<8} {'Status':<10}")
-    print("-" * 85)
+    print(f"{'Model':<25} {'Algorithm':<10} {'Type':<10} {'Accuracy':<10} {'Precision':<10} {'Recall':<10} {'F1':<10} {'Time(s)':<8} {'Status':<10}")
+    print("-" * 115)
     
     for model_name in results:
         for alg_name in results[model_name]:
             result = results[model_name][alg_name]
             
             if result['status'] == 'success':
-                acc = f"{result['accuracy']:.3f}"
-                f1 = f"{result['f1_score']:.3f}"
-                time_str = f"{result['training_time']:.1f}"
+                acc = f"{result.get('accuracy', 0):.3f}"
+                prec = f"{result.get('precision', 0):.3f}"
+                rec = f"{result.get('recall', 0):.3f}"
+                f1 = f"{result.get('f1_score', 0):.3f}"
+                time_str = f"{result.get('training_time', 0):.1f}"
                 status = "✅ Success"
             elif result['status'] == 'evaluation_failed':
-                acc = "N/A"
-                f1 = "N/A"
+                acc = prec = rec = f1 = "N/A"
                 time_str = f"{result.get('training_time', 0):.1f}"
                 status = "⚠️ Eval Failed"
             else:
-                acc = "N/A"
-                f1 = "N/A"
-                time_str = "N/A"
+                acc = prec = rec = f1 = time_str = "N/A"
                 status = "❌ Failed"
             
             enc_type = result.get('encryption_type', 'Unknown')
             
-            print(f"{model_name:<25} {alg_name:<10} {enc_type:<10} {acc:<10} {f1:<10} {time_str:<8} {status:<10}")
+            print(f"{model_name:<25} {alg_name:<10} {enc_type:<10} {acc:<10} {prec:<10} {rec:<10} {f1:<10} {time_str:<8} {status:<10}")
     
-    print("-" * 85)
+    print("-" * 115)
     print("🌐 All experiments used PySyft distributed servers")
+
 
 def run_simple_federated_demo(num_clients=3):
     """FIXED simple federated demo without PySyft complexity"""

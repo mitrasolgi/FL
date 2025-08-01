@@ -28,11 +28,6 @@ class FederatedTrainer:
         self.global_model = None
         self.clients = {}
         self.training_history = []
-    
-    def aggregate_parameters(self, client_params_list, client_weights):
-        """Delegate to FedAvg implementation"""
-        temp_trainer = FedAvgTrainer(self.model_class, self.model_params)
-        return temp_trainer.aggregate_parameters(client_params_list, client_weights)
           
     def initialize_global_model(self, input_dim):
         """Initialize the global model with proper error handling"""
@@ -673,7 +668,7 @@ class SCAFFOLDTrainer(FederatedTrainer):
             print(f"❌ SCAFFOLD training failed for {client_id}: {e}")
             return None, 0, None
     
-    def train_federated(self, client_datasets, num_rounds=10, epochs_per_round=5, lr=0.01, verbose=True):
+    def train_federated(self, client_datasets, num_rounds=10, epochs_per_round=5, lr=0.05, verbose=True):
         """Main federated training loop using SCAFFOLD"""
         if verbose:
             print(f"🚀 Starting SCAFFOLD training with {len(client_datasets)} clients")
@@ -772,6 +767,136 @@ class SCAFFOLDTrainer(FederatedTrainer):
         temp_trainer = FedAvgTrainer(self.model_class, self.model_params)
         temp_trainer.global_model = self.global_model
         return temp_trainer.evaluate_global_model(client_datasets, verbose)
+    def aggregate_parameters(self, client_params_list, client_weights):
+        """SCAFFOLD-specific aggregation that updates global control variate"""
+        try:
+            if not client_params_list or not client_params_list[0]:
+                return None
+                
+            total_weight = sum(client_weights)
+            
+            # First, do standard weighted averaging (same as FedAvg)
+            aggregated = deepcopy(client_params_list[0])
+            
+            # Zero out the aggregated parameters
+            if 'coefs_' in aggregated:  # MLP
+                for i in range(len(aggregated['coefs_'])):
+                    aggregated['coefs_'][i] = np.zeros_like(aggregated['coefs_'][i])
+                for i in range(len(aggregated['intercepts_'])):
+                    aggregated['intercepts_'][i] = np.zeros_like(aggregated['intercepts_'][i])
+                    
+            elif 'coef_' in aggregated:  # LogisticRegression
+                aggregated['coef_'] = np.zeros_like(aggregated['coef_'])
+                aggregated['intercept_'] = np.zeros_like(aggregated['intercept_'])
+                
+            elif 'w' in aggregated:  # HomomorphicLogisticRegression
+                if aggregated['w'] is not None:
+                    aggregated['w'] = np.zeros_like(aggregated['w'])
+                    aggregated['b'] = 0.0
+                    
+            elif 'w1' in aggregated:  # EncryptedMLP
+                aggregated['w1'] = np.zeros_like(aggregated['w1'])
+                aggregated['b1'] = np.zeros_like(aggregated['b1'])
+                aggregated['w2'] = np.zeros_like(aggregated['w2'])
+                aggregated['b2'] = 0.0
+            
+            # Weighted averaging
+            for client_params, weight in zip(client_params_list, client_weights):
+                if not client_params:
+                    continue
+                    
+                weight_ratio = weight / total_weight
+                
+                if 'coefs_' in client_params:  # MLP
+                    for i in range(len(client_params['coefs_'])):
+                        aggregated['coefs_'][i] += weight_ratio * client_params['coefs_'][i]
+                    for i in range(len(client_params['intercepts_'])):
+                        aggregated['intercepts_'][i] += weight_ratio * client_params['intercepts_'][i]
+                        
+                elif 'coef_' in client_params:  # LogisticRegression
+                    aggregated['coef_'] += weight_ratio * client_params['coef_']
+                    aggregated['intercept_'] += weight_ratio * client_params['intercept_']
+                    
+                elif 'w' in client_params and client_params['w'] is not None:  # HomomorphicLogisticRegression
+                    aggregated['w'] += weight_ratio * client_params['w']
+                    aggregated['b'] += weight_ratio * client_params['b']
+                    
+                elif 'w1' in client_params:  # EncryptedMLP
+                    aggregated['w1'] += weight_ratio * client_params['w1']
+                    aggregated['b1'] += weight_ratio * client_params['b1']
+                    aggregated['w2'] += weight_ratio * client_params['w2']
+                    aggregated['b2'] += weight_ratio * client_params['b2']
+            
+            # SCAFFOLD-SPECIFIC: Update global control variate
+            # Global control = (1/N) * sum(client_controls)
+            if self.client_controls and self.global_control is not None:
+                try:
+                    self.update_global_control()
+                    print("   🔧 SCAFFOLD global control variate updated")
+                except Exception as e:
+                    print(f"   ⚠️ Failed to update global control: {e}")
+            
+            return aggregated
+            
+        except Exception as e:
+            print(f"❌ Error in SCAFFOLD parameter aggregation: {e}")
+            return None
+    
+    def update_global_control(self):
+        """Update global control variate as average of client controls"""
+        if not self.client_controls:
+            return
+            
+        num_clients = len(self.client_controls)
+        
+        # Reset global control to zero
+        if 'coef_' in self.global_control:  # LogisticRegression
+            self.global_control['coef_'] = np.zeros_like(self.global_control['coef_'])
+            self.global_control['intercept_'] = np.zeros_like(self.global_control['intercept_'])
+            
+            # Average client controls
+            for client_control in self.client_controls.values():
+                if client_control and 'coef_' in client_control:
+                    self.global_control['coef_'] += client_control['coef_'] / num_clients
+                    self.global_control['intercept_'] += client_control['intercept_'] / num_clients
+                    
+        elif 'coefs_' in self.global_control:  # MLPClassifier
+            for i in range(len(self.global_control['coefs_'])):
+                self.global_control['coefs_'][i] = np.zeros_like(self.global_control['coefs_'][i])
+            for i in range(len(self.global_control['intercepts_'])):
+                self.global_control['intercepts_'][i] = np.zeros_like(self.global_control['intercepts_'][i])
+                
+            # Average client controls
+            for client_control in self.client_controls.values():
+                if client_control and 'coefs_' in client_control:
+                    for i in range(len(client_control['coefs_'])):
+                        self.global_control['coefs_'][i] += client_control['coefs_'][i] / num_clients
+                    for i in range(len(client_control['intercepts_'])):
+                        self.global_control['intercepts_'][i] += client_control['intercepts_'][i] / num_clients
+                        
+        elif 'w' in self.global_control:  # HomomorphicLogisticRegression
+            if self.global_control['w'] is not None:
+                self.global_control['w'] = np.zeros_like(self.global_control['w'])
+                self.global_control['b'] = 0.0
+                
+                for client_control in self.client_controls.values():
+                    if client_control and client_control.get('w') is not None:
+                        self.global_control['w'] += client_control['w'] / num_clients
+                        self.global_control['b'] += client_control['b'] / num_clients
+                        
+        elif 'w1' in self.global_control:  # EncryptedMLP
+            self.global_control['w1'] = np.zeros_like(self.global_control['w1'])
+            self.global_control['b1'] = np.zeros_like(self.global_control['b1'])
+            self.global_control['w2'] = np.zeros_like(self.global_control['w2'])
+            self.global_control['b2'] = 0.0
+            
+            for client_control in self.client_controls.values():
+                if client_control and 'w1' in client_control:
+                    self.global_control['w1'] += client_control['w1'] / num_clients
+                    self.global_control['b1'] += client_control['b1'] / num_clients
+                    self.global_control['w2'] += client_control['w2'] / num_clients
+                    self.global_control['b2'] += client_control['b2'] / num_clients
+
 
 def run_comprehensive_federated_experiments():
     """Run comprehensive federated learning experiments with all fixes applied"""
